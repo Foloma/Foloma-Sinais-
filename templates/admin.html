@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin | Foloma Visão 360</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: #1e293b;
+            border-radius: 20px;
+            padding: 20px;
+        }
+        h1 { color: #fbbf24; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #334155; }
+        .btn {
+            background: #f59e0b;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 20px;
+            color: #0f172a;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-success { background: #22c55e; color: white; }
+        .back { margin-top: 20px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👑 Administração – Foloma Visão 360</h1>
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Utilizador</th><th>Admin</th><th>Activo</th><th>Ação</th></tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>{{ user[0] }}</td>
+                    <td>{{ user[1] }}</td>
+                    <td>{{ "Sim" if user[3] else "Não" }}</td>
+                    <td>{{ "Sim" if user[2] else "Não" }}</td>
+                    <td>
+                        <a href="{{ url_for('admin_toggle', user_id=user[0]) }}" class="btn {% if user[2] %}btn-danger{% else %}btn-success{% endif %}">
+                            {% if user[2] %}Desactivar{% else %}Activar{% endif %}
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+         </table>
+        <a href="{{ url_for('index') }}" class="btn back">Voltar</a>
+    </div>
+</body>
+</html>
