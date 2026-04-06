@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Foloma Visão 360 – Acesso Exclusivo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .card {
+            background: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(10px);
+            padding: 30px;
+            border-radius: 32px;
+            max-width: 500px;
+            text-align: center;
+            color: white;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        h1 { color: #fbbf24; }
+        .btn {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            border: none;
+            padding: 12px 24px;
+            border-radius: 40px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin: 20px 0;
+        }
+        .checkbox { margin: 20px 0; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        a { color: #fbbf24; }
+        .footer-note { font-size: 12px; margin-top: 20px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🚀 Foloma Visão 360 Sinais</h1>
+        <p><strong>Bem-vindo à plataforma de sinais de alta precisão!</strong></p>
+        <p>Para aceder aos sinais exclusivos, precisa de uma conta gratuita na <strong>Pocket Option</strong>.</p>
+        <p>Clique no botão abaixo e registe-se através do nosso link de parceria:</p>
+        <a href="https://pocket-friends.co/r/br4kbim2pe" target="_blank" class="btn">📈 Abrir Pocket Option</a>
+        <div class="checkbox">
+            <label>
+                <input type="checkbox" id="confirmacao"> ✅ Já me cadastrei através do link.
+            </label>
+        </div>
+        <button id="continuar" disabled>Continuar para o Registo</button>
+        <div class="footer-note">
+            Este passo é obrigatório para manter a plataforma gratuita. Obrigado por apoiar o Foloma Visão 360!
+        </div>
+    </div>
+    <script>
+        document.getElementById('confirmacao').addEventListener('change', function(e) {
+            document.getElementById('continuar').disabled = !e.target.checked;
+        });
+        document.getElementById('continuar').addEventListener('click', function() {
+            window.location.href = "{{ url_for('register') }}";
+        });
+    </script>
+</body>
+  </html>
