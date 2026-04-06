@@ -17,38 +17,37 @@ def load_user(user_id):
     return models.get_user_by_id(int(user_id))
 
 # ==============================================
-# CONFIGURAÇÕES DOS SINAIS (10 ativos)
+# CONFIGURAÇÕES DOS SINAIS (CoinGecko)
 # ==============================================
+# Mapeamento: ID CoinGecko -> nome amigável (Pocket Option)
 ATIVOS = {
-    "BTCUSDT": "BTCUSD",
-    "ETHUSDT": "ETHUSD",
-    "BNBUSDT": "BNBUSD",
-    "ADAUSDT": "ADAUSD",
-    "SOLUSDT": "SOLUSD",
-    "LTCUSDT": "LTCUSD",
-    "LINKUSDT": "LINKUSD",
-    "DOTUSDT": "DOTUSD",
-    "TRXUSDT": "TRXUSD",
-    "AVAXUSDT": "AVAXUSD"
+    "bitcoin": "BTCUSD",
+    "ethereum": "ETHUSD",
+    "binancecoin": "BNBUSD",
+    "cardano": "ADAUSD",
+    "solana": "SOLUSD",
+    "litecoin": "LTCUSD",
+    "chainlink": "LINKUSD",
+    "polkadot": "DOTUSD",
+    "tron": "TRXUSD",
+    "avalanche-2": "AVAXUSD"
 }
 JANELA_TICKS = 30
 SCORE_MINIMO = 1.5
 # ==============================================
 
-def obter_precos_binance(simbolo, limite=JANELA_TICKS):
+def obter_precos_coingecko(id_moeda, limite=30):
+    """Obtém os últimos 'limite' preços (candles de 1 minuto) da CoinGecko"""
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={simbolo}&interval=1m&limit={limite}"
-        resp = requests.get(url, timeout=10)
+        url = f"https://api.coingecko.com/api/v3/coins/{id_moeda}/market_chart?vs_currency=usd&days=1&interval=minutely"
+        resp = requests.get(url, timeout=15)
         if resp.status_code == 200:
             dados = resp.json()
-            precos = [float(candle[4]) for candle in dados]
+            precos = [preco[1] for preco in dados['prices'][-limite:]]
             return precos
     except Exception as e:
-        print(f"Erro ao obter {simbolo}: {e}")
+        print(f"Erro CoinGecko ({id_moeda}): {e}")
     return None
-
-# (aqui deve estar o resto das funções: calcular_ema, rsi, macd, bollinger, analisar_ativo, obter_melhor_sinal, etc.)
-# Como o código é extenso, peço que use o ficheiro completo que já lhe enviei na resposta anterior.
 
 def calcular_ema(precos, periodo):
     if len(precos) < periodo:
@@ -98,7 +97,7 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     inferior = media - desvios * std
     return superior, media, inferior
 
-def analisar_ativo(sym_binance, nome_pocket, precos):
+def analisar_ativo(id_moeda, nome_pocket, precos):
     if len(precos) < JANELA_TICKS:
         return None, 0, f"Acumulando: {len(precos)}/{JANELA_TICKS} candles"
 
@@ -158,11 +157,11 @@ def analisar_ativo(sym_binance, nome_pocket, precos):
 
 def obter_melhor_sinal():
     melhores = []
-    for sym_binance, nome_pocket in ATIVOS.items():
-        precos = obter_precos_binance(sym_binance, JANELA_TICKS)
+    for id_moeda, nome_pocket in ATIVOS.items():
+        precos = obter_precos_coingecko(id_moeda, JANELA_TICKS)
         if precos is None:
             continue
-        sinal, score, just = analisar_ativo(sym_binance, nome_pocket, precos)
+        sinal, score, just = analisar_ativo(id_moeda, nome_pocket, precos)
         if sinal is not None:
             melhores.append((nome_pocket, sinal, score, just))
     if not melhores:
@@ -172,12 +171,11 @@ def obter_melhor_sinal():
             "score": 0,
             "analise": "Nenhum sinal forte no momento",
             "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "tempo_exp": 2
+            "tempo_exp": None
         }
     melhores.sort(key=lambda x: x[2], reverse=True)
     ativo, sinal, score, just = melhores[0]
 
-    # Regras de expiração baseadas no score (mais agressivas)
     if score >= 3.5:
         tempo_exp = 1
     elif score >= 2.5:
@@ -195,7 +193,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# CRIA ADMIN
+# CRIA ADMIN SE NÃO EXISTIR
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -250,8 +248,7 @@ def register():
 @app.route('/')
 @login_required
 def index():
-    trades = models.get_user_trades(current_user.id, limit=20)
-    return render_template('index.html', trades=trades)
+    return render_template('index.html')
 
 @app.route('/api/sinal')
 @login_required
@@ -262,8 +259,8 @@ def api_sinal():
 @login_required
 def api_status():
     status = {}
-    for sym_binance, nome_pocket in ATIVOS.items():
-        precos = obter_precos_binance(sym_binance, JANELA_TICKS)
+    for id_moeda, nome_pocket in ATIVOS.items():
+        precos = obter_precos_coingecko(id_moeda, JANELA_TICKS)
         status[nome_pocket] = len(precos) if precos else 0
     return jsonify(status)
 
@@ -279,36 +276,6 @@ def config():
         except:
             return jsonify({"status": "erro", "msg": "Valor inválido"}), 400
     return jsonify({"status": "erro"}), 400
-
-@app.route('/api/registar_trade', methods=['POST'])
-@login_required
-def registar_trade():
-    """Regista um novo trade baseado no último sinal (antes do resultado)"""
-    data = request.get_json()
-    ativo = data.get('ativo')
-    direcao = data.get('direcao')
-    score = data.get('score')
-    expiracao = data.get('expiracao')
-    if not all([ativo, direcao, score, expiracao]):
-        return jsonify({"status": "erro", "msg": "Dados incompletos"}), 400
-    trade_id = models.add_trade(current_user.id, ativo, direcao, score, expiracao)
-    return jsonify({"status": "ok", "trade_id": trade_id})
-
-@app.route('/api/resultado_trade', methods=['POST'])
-@login_required
-def resultado_trade():
-    """Actualiza o último trade não resolvido com o resultado (ganhou/perdeu)"""
-    data = request.get_json()
-    resultado = data.get('resultado')  # 'Ganhou' ou 'Perdeu'
-    if resultado not in ('Ganhou', 'Perdeu'):
-        return jsonify({"status": "erro", "msg": "Resultado inválido"}), 400
-    # Procura o último trade sem resultado
-    trade = models.get_last_unresolved_trade(current_user.id)
-    if not trade:
-        return jsonify({"status": "erro", "msg": "Nenhum trade pendente"}), 404
-    trade_id = trade[0]
-    models.update_trade_result(trade_id, resultado)
-    return jsonify({"status": "ok"})
 
 @app.route('/logout')
 @login_required
