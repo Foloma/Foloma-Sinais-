@@ -1,0 +1,339 @@
+from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+import requests
+import secrets
+from datetime import datetime
+import models
+
+app = Flask(__name__)
+app.secret_key = secrets.token_hex(32)
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+@login_manager.user_loader
+def load_user(user_id):
+    return models.get_user_by_id(int(user_id))
+
+# ==============================================
+# CONFIGURAÇÕES DOS SINAIS (10 ativos)
+# ==============================================
+ATIVOS = {
+    "BTCUSDT": "BTCUSD",
+    "ETHUSDT": "ETHUSD",
+    "BNBUSDT": "BNBUSD",
+    "ADAUSDT": "ADAUSD",
+    "SOLUSDT": "SOLUSD",
+    "LTCUSDT": "LTCUSD",
+    "LINKUSDT": "LINKUSD",
+    "DOTUSDT": "DOTUSD",
+    "TRXUSDT": "TRXUSD",
+    "AVAXUSDT": "AVAXUSD"
+}
+JANELA_TICKS = 30
+SCORE_MINIMO = 1.5
+# ==============================================
+
+def obter_precos_binance(simbolo, limite=JANELA_TICKS):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={simbolo}&interval=1m&limit={limite}"
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            dados = resp.json()
+            precos = [float(candle[4]) for candle in dados]
+            return precos
+    except Exception as e:
+        print(f"Erro ao obter {simbolo}: {e}")
+    return None
+
+# (aqui deve estar o resto das funções: calcular_ema, rsi, macd, bollinger, analisar_ativo, obter_melhor_sinal, etc.)
+# Como o código é extenso, peço que use o ficheiro completo que já lhe enviei na resposta anterior.
+
+def calcular_ema(precos, periodo):
+    if len(precos) < periodo:
+        return None
+    mult = 2 / (periodo + 1)
+    ema = precos[0]
+    for p in precos[1:periodo]:
+        ema = (p - ema) * mult + ema
+    return ema
+
+def calcular_rsi(precos, periodo=7):
+    if len(precos) < periodo + 1:
+        return 50
+    ganhos, perdas = [], []
+    for i in range(1, periodo+1):
+        diff = precos[-i] - precos[-i-1]
+        if diff > 0:
+            ganhos.append(diff)
+            perdas.append(0)
+        else:
+            ganhos.append(0)
+            perdas.append(abs(diff))
+    avg_gain = sum(ganhos) / periodo
+    avg_loss = sum(perdas) / periodo
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100/(1+rs))
+
+def calcular_macd(precos):
+    if len(precos) < 26:
+        return None
+    ema12 = calcular_ema(precos, 12)
+    ema26 = calcular_ema(precos, 26)
+    if None in (ema12, ema26):
+        return None
+    return ema12 - ema26
+
+def calcular_bollinger(precos, periodo=20, desvios=2):
+    if len(precos) < periodo:
+        return None, None, None
+    ultimos = precos[-periodo:]
+    media = sum(ultimos) / periodo
+    var = sum((x - media) ** 2 for x in ultimos) / periodo
+    std = var ** 0.5
+    superior = media + desvios * std
+    inferior = media - desvios * std
+    return superior, media, inferior
+
+def analisar_ativo(sym_binance, nome_pocket, precos):
+    if len(precos) < JANELA_TICKS:
+        return None, 0, f"Acumulando: {len(precos)}/{JANELA_TICKS} candles"
+
+    ema5 = calcular_ema(precos, 5)
+    ema13 = calcular_ema(precos, 13)
+    if None in (ema5, ema13):
+        return None, 0, "Erro EMAs"
+
+    rsi = calcular_rsi(precos, 7)
+    macd = calcular_macd(precos)
+    upper, middle, lower = calcular_bollinger(precos)
+    preco_atual = precos[-1]
+
+    score = 0
+    if ema5 > ema13:
+        tendencia = "CALL"
+        score += 1
+    else:
+        tendencia = "PUT"
+        score += 1
+
+    if tendencia == "CALL" and rsi < 55:
+        score += 1
+    elif tendencia == "PUT" and rsi > 45:
+        score += 1
+    elif tendencia == "CALL" and rsi < 65:
+        score += 0.5
+    elif tendencia == "PUT" and rsi > 35:
+        score += 0.5
+
+    if macd is not None:
+        if tendencia == "CALL" and macd > 0:
+            score += 0.5
+        elif tendencia == "PUT" and macd < 0:
+            score += 0.5
+
+    if upper is not None:
+        if tendencia == "CALL" and preco_atual <= lower * 1.001:
+            score += 0.5
+        elif tendencia == "PUT" and preco_atual >= upper * 0.999:
+            score += 0.5
+
+    diff_percent = abs(ema5 - ema13) / ema13 * 100
+    if diff_percent > 0.15:
+        score += 0.5
+    elif diff_percent > 0.08:
+        score += 0.25
+
+    macd_str = f"{macd:.2f}" if macd is not None else "N/A"
+    just = (f"EMA5:{ema5:.5f} EMA13:{ema13:.5f} | RSI:{rsi:.1f} | "
+            f"MACD:{macd_str} | Dif:{diff_percent:.2f}%")
+
+    if score >= SCORE_MINIMO:
+        return tendencia, score, just
+    else:
+        return None, score, just
+
+def obter_melhor_sinal():
+    melhores = []
+    for sym_binance, nome_pocket in ATIVOS.items():
+        precos = obter_precos_binance(sym_binance, JANELA_TICKS)
+        if precos is None:
+            continue
+        sinal, score, just = analisar_ativo(sym_binance, nome_pocket, precos)
+        if sinal is not None:
+            melhores.append((nome_pocket, sinal, score, just))
+    if not melhores:
+        return {
+            "ativo": None,
+            "direcao": None,
+            "score": 0,
+            "analise": "Nenhum sinal forte no momento",
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "tempo_exp": 2
+        }
+    melhores.sort(key=lambda x: x[2], reverse=True)
+    ativo, sinal, score, just = melhores[0]
+
+    # Regras de expiração baseadas no score (mais agressivas)
+    if score >= 3.5:
+        tempo_exp = 1
+    elif score >= 2.5:
+        tempo_exp = 2
+    else:
+        tempo_exp = 3
+
+    return {
+        "ativo": ativo,
+        "direcao": sinal,
+        "score": score,
+        "analise": just,
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "tempo_exp": tempo_exp
+    }
+
+# ==============================================
+# CRIA ADMIN
+# ==============================================
+def create_admin_if_not_exists():
+    admin = models.get_user_by_username('admin')
+    if not admin:
+        models.create_user('admin', 'admin123', is_admin=True)
+        print("Administrador criado: admin / admin123")
+
+create_admin_if_not_exists()
+
+# ==============================================
+# ROTAS PÚBLICAS
+# ==============================================
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        user = models.get_user_by_username(username)
+        if user and user.check_password(password):
+            if not user.is_active:
+                flash('Conta desactivada. Contacte o administrador.')
+            else:
+                login_user(user)
+                return redirect(url_for('index'))
+        else:
+            flash('Credenciais inválidas')
+    return render_template('login.html')
+
+@app.route('/afiliado')
+def afiliado():
+    return render_template('afiliado.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        if len(password) < 4:
+            flash('A palavra-passe deve ter pelo menos 4 caracteres')
+        else:
+            user = models.create_user(username, password)
+            if user:
+                login_user(user)
+                return redirect(url_for('index'))
+            else:
+                flash('Nome de utilizador já existe')
+    return render_template('register.html')
+
+# ==============================================
+# ROTAS PROTEGIDAS
+# ==============================================
+@app.route('/')
+@login_required
+def index():
+    trades = models.get_user_trades(current_user.id, limit=20)
+    return render_template('index.html', trades=trades)
+
+@app.route('/api/sinal')
+@login_required
+def api_sinal():
+    return jsonify(obter_melhor_sinal())
+
+@app.route('/api/status')
+@login_required
+def api_status():
+    status = {}
+    for sym_binance, nome_pocket in ATIVOS.items():
+        precos = obter_precos_binance(sym_binance, JANELA_TICKS)
+        status[nome_pocket] = len(precos) if precos else 0
+    return jsonify(status)
+
+@app.route('/api/config', methods=['POST'])
+@login_required
+def config():
+    global SCORE_MINIMO
+    data = request.get_json()
+    if 'score_minimo' in data:
+        try:
+            SCORE_MINIMO = float(data['score_minimo'])
+            return jsonify({"status": "ok", "score_minimo": SCORE_MINIMO})
+        except:
+            return jsonify({"status": "erro", "msg": "Valor inválido"}), 400
+    return jsonify({"status": "erro"}), 400
+
+@app.route('/api/registar_trade', methods=['POST'])
+@login_required
+def registar_trade():
+    """Regista um novo trade baseado no último sinal (antes do resultado)"""
+    data = request.get_json()
+    ativo = data.get('ativo')
+    direcao = data.get('direcao')
+    score = data.get('score')
+    expiracao = data.get('expiracao')
+    if not all([ativo, direcao, score, expiracao]):
+        return jsonify({"status": "erro", "msg": "Dados incompletos"}), 400
+    trade_id = models.add_trade(current_user.id, ativo, direcao, score, expiracao)
+    return jsonify({"status": "ok", "trade_id": trade_id})
+
+@app.route('/api/resultado_trade', methods=['POST'])
+@login_required
+def resultado_trade():
+    """Actualiza o último trade não resolvido com o resultado (ganhou/perdeu)"""
+    data = request.get_json()
+    resultado = data.get('resultado')  # 'Ganhou' ou 'Perdeu'
+    if resultado not in ('Ganhou', 'Perdeu'):
+        return jsonify({"status": "erro", "msg": "Resultado inválido"}), 400
+    # Procura o último trade sem resultado
+    trade = models.get_last_unresolved_trade(current_user.id)
+    if not trade:
+        return jsonify({"status": "erro", "msg": "Nenhum trade pendente"}), 404
+    trade_id = trade[0]
+    models.update_trade_result(trade_id, resultado)
+    return jsonify({"status": "ok"})
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+@app.route('/admin')
+@login_required
+def admin():
+    if not current_user.is_admin:
+        return "Acesso negado", 403
+    users = models.list_users()
+    return render_template('admin.html', users=users)
+
+@app.route('/admin/toggle/<int:user_id>')
+@login_required
+def admin_toggle(user_id):
+    if not current_user.is_admin:
+        return "Acesso negado", 403
+    user = models.get_user_by_id(user_id)
+    if user:
+        new_state = not user.is_active
+        models.set_user_active(user_id, new_state)
+    return redirect(url_for('admin'))
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=False)
