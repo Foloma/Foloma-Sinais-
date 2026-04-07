@@ -19,52 +19,84 @@ def load_user(user_id):
     return models.get_user_by_id(int(user_id))
 
 # ==============================================
-# CONFIGURAÇÕES DOS SINAIS (CoinPaprika)
+# CONFIGURAÇÕES (FOREX - exchangerate.host)
 # ==============================================
-# Mapeamento: ID CoinPaprika -> nome amigável (Pocket Option)
+# Pares forex disponíveis na Pocket Option
 ATIVOS = {
-    "btc-bitcoin": "BTCUSD",
-    "eth-ethereum": "ETHUSD",
-    "bnb-binance-coin": "BNBUSD",
-    "ada-cardano": "ADAUSD",
-    "sol-solana": "SOLUSD",
-    "ltc-litecoin": "LTCUSD",
-    "link-chainlink": "LINKUSD",
-    "dot-polkadot": "DOTUSD",
-    "tron-trx": "TRXUSD",
-    "avax-avalanche": "AVAXUSD"
+    "EURUSD": "EURUSD",
+    "GBPUSD": "GBPUSD",
+    "USDJPY": "USDJPY",
+    "USDCAD": "USDCAD",
+    "AUDUSD": "AUDUSD",
+    "NZDUSD": "NZDUSD"
 }
 JANELA_TICKS = 30
 INTERVALO_TICK = 5        # segundos entre cada coleta
 SCORE_MINIMO = 1.5
 # ==============================================
 
-# Estrutura para armazenar os preços de cada ativo
-precos_por_ativo = {simbolo: [] for simbolo in ATIVOS}
+# Estrutura para armazenar os preços de cada par
+precos_por_ativo = {par: [] for par in ATIVOS}
 lock = threading.Lock()
 
-def obter_preco_coinpaprika(id_moeda):
-    """Obtém o preço atual de uma criptomoeda via CoinPaprika"""
+def obter_preco_forex(par):
+    """
+    Obtém o preço atual de um par forex usando exchangerate.host.
+    A API fornece taxas baseadas em EUR.
+    """
     try:
-        url = f"https://api.coinpaprika.com/v1/tickers/{id_moeda}"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            dados = resp.json()
-            return float(dados['quotes']['USD']['price'])
+        # Exemplo: para EURUSD, base EUR, target USD
+        if par == "EURUSD":
+            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                return float(resp.json()['rates']['USD'])
+        elif par == "GBPUSD":
+            # GBPUSD = (EUR/USD) / (EUR/GBP)
+            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,GBP"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                rates = resp.json()['rates']
+                return rates['USD'] / rates['GBP']
+        elif par == "USDJPY":
+            # USDJPY = (EUR/JPY) / (EUR/USD)
+            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,JPY"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                rates = resp.json()['rates']
+                return rates['JPY'] / rates['USD']
+        elif par == "USDCAD":
+            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,CAD"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                rates = resp.json()['rates']
+                return rates['CAD'] / rates['USD']
+        elif par == "AUDUSD":
+            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,AUD"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                rates = resp.json()['rates']
+                return rates['USD'] / rates['AUD']
+        elif par == "NZDUSD":
+            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,NZD"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                rates = resp.json()['rates']
+                return rates['USD'] / rates['NZD']
     except Exception as e:
-        print(f"Erro CoinPaprika ({id_moeda}): {e}")
+        print(f"Erro ao obter {par}: {e}")
     return None
 
 def coletar_ticks():
     """Thread que atualiza os preços a cada INTERVALO_TICK segundos"""
     while True:
-        for id_moeda, nome_pocket in ATIVOS.items():
-            preco = obter_preco_coinpaprika(id_moeda)
+        for par in ATIVOS:
+            preco = obter_preco_forex(par)
             if preco is not None:
                 with lock:
-                    precos_por_ativo[id_moeda].append(preco)
-                    if len(precos_por_ativo[id_moeda]) > JANELA_TICKS:
-                        precos_por_ativo[id_moeda].pop(0)
+                    precos_por_ativo[par].append(preco)
+                    if len(precos_por_ativo[par]) > JANELA_TICKS:
+                        precos_por_ativo[par].pop(0)
         time.sleep(INTERVALO_TICK)
 
 # Inicia a thread de coleta em segundo plano
@@ -122,7 +154,7 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     inferior = media - desvios * std
     return superior, media, inferior
 
-def analisar_ativo(id_moeda, nome_pocket, precos):
+def analisar_ativo(par, precos):
     if len(precos) < JANELA_TICKS:
         return None, 0, f"Acumulando: {len(precos)}/{JANELA_TICKS} ticks"
 
@@ -171,8 +203,8 @@ def analisar_ativo(id_moeda, nome_pocket, precos):
     elif diff_percent > 0.08:
         score += 0.25
 
-    macd_str = f"{macd:.2f}" if macd is not None else "N/A"
-    just = (f"EMA5:{ema5:.2f} EMA13:{ema13:.2f} | RSI:{rsi:.1f} | "
+    macd_str = f"{macd:.5f}" if macd is not None else "N/A"
+    just = (f"EMA5:{ema5:.5f} EMA13:{ema13:.5f} | RSI:{rsi:.1f} | "
             f"MACD:{macd_str} | Dif:{diff_percent:.2f}%")
 
     if score >= SCORE_MINIMO:
@@ -183,13 +215,13 @@ def analisar_ativo(id_moeda, nome_pocket, precos):
 def obter_melhor_sinal():
     melhores = []
     with lock:
-        for id_moeda, nome_pocket in ATIVOS.items():
-            precos = precos_por_ativo[id_moeda].copy()
+        for par in ATIVOS:
+            precos = precos_por_ativo[par].copy()
             if len(precos) < JANELA_TICKS:
                 continue
-            sinal, score, just = analisar_ativo(id_moeda, nome_pocket, precos)
+            sinal, score, just = analisar_ativo(par, precos)
             if sinal is not None:
-                melhores.append((nome_pocket, sinal, score, just))
+                melhores.append((par, sinal, score, just))
     if not melhores:
         return {
             "ativo": None,
@@ -219,7 +251,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# CRIA ADMIN E ROTAS (mantidas iguais)
+# ROTAS (login, registo, afiliado, admin)
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -279,9 +311,7 @@ def api_sinal():
 @login_required
 def api_status():
     with lock:
-        status = {}
-        for id_moeda, nome_pocket in ATIVOS.items():
-            status[nome_pocket] = len(precos_por_ativo[id_moeda])
+        status = {par: len(precos_por_ativo[par]) for par in ATIVOS}
     return jsonify(status)
 
 @app.route('/api/config', methods=['POST'])
