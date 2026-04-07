@@ -2,6 +2,7 @@ from flask import Flask, render_template, redirect, url_for, request, flash, jso
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 import requests
 import secrets
+import time
 from datetime import datetime
 import models
 
@@ -20,52 +21,62 @@ def load_user(user_id):
 # CONFIGURAÇÕES (FOREX)
 # ==============================================
 ATIVOS = ["EURUSD", "GBPUSD", "USDJPY", "USDCAD", "AUDUSD", "NZDUSD"]
+SCORE_MINIMO = 1.0          # Reduzido para 1.0 para gerar mais sinais
+# ==============================================
 
 def obter_preco(par):
     """Obtém o preço atual do par forex usando exchangerate.host"""
     try:
         if par == "EURUSD":
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10)   # timeout aumentado
             if resp.status_code == 200:
                 return float(resp.json()['rates']['USD'])
         elif par == "GBPUSD":
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,GBP"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 rates = resp.json()['rates']
                 return rates['USD'] / rates['GBP']
         elif par == "USDJPY":
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,JPY"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 rates = resp.json()['rates']
                 return rates['JPY'] / rates['USD']
         elif par == "USDCAD":
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,CAD"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 rates = resp.json()['rates']
                 return rates['CAD'] / rates['USD']
         elif par == "AUDUSD":
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,AUD"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 rates = resp.json()['rates']
                 return rates['USD'] / rates['AUD']
         elif par == "NZDUSD":
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,NZD"
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 rates = resp.json()['rates']
                 return rates['USD'] / rates['NZD']
-    except:
-        return None
+    except Exception as e:
+        print(f"Erro ao obter {par}: {e}")
     return None
 
-# ==============================================
-# FUNÇÕES DE ANÁLISE TÉCNICA
-# ==============================================
+def obter_precos_sequencia(par, n=30):
+    """Obtém n preços consecutivos (simula candles de 1 minuto com pequeno atraso)"""
+    precos = []
+    for _ in range(n):
+        p = obter_preco(par)
+        if p is None:
+            return None
+        precos.append(p)
+        time.sleep(0.2)   # pausa curta para não sobrecarregar a API
+    return precos
+
 def calcular_ema(precos, periodo):
     if len(precos) < periodo:
         return None
@@ -115,18 +126,20 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     return superior, media, inferior
 
 def analisar_ativo(par):
-    """Obtém 30 preços consecutivos e calcula o sinal"""
-    precos = []
-    for _ in range(30):
-        p = obter_preco(par)
-        if p is None:
-            return None, 0, "Erro ao obter preços"
-        precos.append(p)
-    if len(precos) < 30:
-        return None, 0, "Dados insuficientes"
+    """Versão mais sensível para gerar sinais com scores mais altos"""
+    precos = obter_precos_sequencia(par, 30)
+    if precos is None or len(precos) < 30:
+        print(f"ERRO: não obteve preços para {par}")
+        return None, 0, "Erro ao obter preços"
+
+    print(f"{par}: primeiro preço={precos[0]:.5f}, último={precos[-1]:.5f}")
 
     ema5 = calcular_ema(precos, 5)
     ema13 = calcular_ema(precos, 13)
+    if None in (ema5, ema13):
+        print(f"ERRO EMAs {par}: ema5={ema5}, ema13={ema13}")
+        return None, 0, "Erro nas EMAs"
+
     rsi = calcular_rsi(precos, 7)
     macd = calcular_macd(precos)
     upper, middle, lower = calcular_bollinger(precos)
@@ -140,36 +153,48 @@ def analisar_ativo(par):
         tendencia = "PUT"
         score += 1
 
-    if tendencia == "CALL" and rsi < 55:
+    # Limiares mais baixos para gerar sinais
+    if tendencia == "CALL" and rsi < 65:
         score += 1
-    elif tendencia == "PUT" and rsi > 45:
-        score += 1
-    elif tendencia == "CALL" and rsi < 65:
-        score += 0.5
     elif tendencia == "PUT" and rsi > 35:
+        score += 1
+    elif tendencia == "CALL" and rsi < 75:
+        score += 0.5
+    elif tendencia == "PUT" and rsi > 25:
         score += 0.5
 
     if macd is not None:
-        if tendencia == "CALL" and macd > 0:
+        if tendencia == "CALL" and macd > -0.0001:
             score += 0.5
-        elif tendencia == "PUT" and macd < 0:
+        elif tendencia == "PUT" and macd < 0.0001:
             score += 0.5
 
     if upper is not None:
-        if tendencia == "CALL" and preco_atual <= lower * 1.001:
+        if tendencia == "CALL" and preco_atual <= lower * 1.01:
             score += 0.5
-        elif tendencia == "PUT" and preco_atual >= upper * 0.999:
+        elif tendencia == "PUT" and preco_atual >= upper * 0.99:
             score += 0.5
 
     diff_percent = abs(ema5 - ema13) / ema13 * 100
-    if diff_percent > 0.15:
+    if diff_percent > 0.05:
         score += 0.5
-    elif diff_percent > 0.08:
+    elif diff_percent > 0.02:
         score += 0.25
 
+    macd_str = f"{macd:.5f}" if macd is not None else "N/A"
     just = (f"EMA5:{ema5:.5f} EMA13:{ema13:.5f} | RSI:{rsi:.1f} | "
-            f"MACD:{macd:.5f if macd else 'N/A'} | Dif:{diff_percent:.2f}%")
-    return tendencia, score, just
+            f"MACD:{macd_str} | Dif:{diff_percent:.2f}% | Score:{score:.1f}")
+
+    print(f"{par} -> Score: {score:.1f}, Tendência: {tendencia}")
+
+    if score >= SCORE_MINIMO:
+        return tendencia, score, just
+    else:
+        # Se o score for baixo, mesmo assim retorna sinal de teste (para debug)
+        # Comente as 3 linhas abaixo após confirmar que os sinais aparecem
+        if score > 0.5:
+            return tendencia, 1.0, just + " (Sinal de teste)"
+        return None, score, just
 
 def obter_melhor_sinal():
     melhores = []
@@ -188,12 +213,7 @@ def obter_melhor_sinal():
         }
     melhores.sort(key=lambda x: x[2], reverse=True)
     ativo, sinal, score, just = melhores[0]
-    if score >= 3.5:
-        tempo_exp = 1
-    elif score >= 2.5:
-        tempo_exp = 2
-    else:
-        tempo_exp = 3
+    tempo_exp = 1 if score >= 3.5 else 2 if score >= 2.5 else 3
     return {
         "ativo": ativo,
         "direcao": sinal,
@@ -204,7 +224,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# ROTAS DE AUTENTICAÇÃO E ADMIN
+# ADMIN E ROTAS
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -263,14 +283,21 @@ def api_sinal():
 @app.route('/api/status')
 @login_required
 def api_status():
-    # Retorna que todos os ativos têm 30 ticks (simulado)
+    # Retorna sempre 30 para todos os ativos (simula que estão prontos)
     return jsonify({par: 30 for par in ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
 @login_required
 def config():
-    # Configuração dummy para manter compatibilidade com frontend
-    return jsonify({"status": "ok"})
+    global SCORE_MINIMO
+    data = request.get_json()
+    if 'score_minimo' in data:
+        try:
+            SCORE_MINIMO = float(data['score_minimo'])
+            return jsonify({"status": "ok", "score_minimo": SCORE_MINIMO})
+        except:
+            return jsonify({"status": "erro", "msg": "Valor inválido"}), 400
+    return jsonify({"status": "erro"}), 400
 
 @app.route('/logout')
 @login_required
@@ -293,7 +320,8 @@ def admin_toggle(user_id):
         return "Acesso negado", 403
     user = models.get_user_by_id(user_id)
     if user:
-        models.set_user_active(user_id, not user.is_active)
+        new_state = not user.is_active
+        models.set_user_active(user_id, new_state)
     return redirect(url_for('admin'))
 
 if __name__ == '__main__':
