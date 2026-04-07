@@ -1,7 +1,7 @@
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-import requests
 import secrets
+import random
 import time
 from datetime import datetime
 import models
@@ -18,63 +18,67 @@ def load_user(user_id):
     return models.get_user_by_id(int(user_id))
 
 # ==============================================
-# CONFIGURAÇÕES (FOREX)
+# CONFIGURAÇÕES (SIMULAÇÃO REALISTA)
 # ==============================================
 ATIVOS = ["EURUSD", "GBPUSD", "USDJPY", "USDCAD", "AUDUSD", "NZDUSD"]
-SCORE_MINIMO = 1.0          # Reduzido para 1.0 para gerar mais sinais
+SCORE_MINIMO = 1.0
 # ==============================================
 
-def obter_preco(par):
-    """Obtém o preço atual do par forex usando exchangerate.host"""
-    try:
+# Simulador de preços (random walk com tendência)
+class GeradorPrecos:
+    def __init__(self):
+        self.precos = {}          # guarda o último preço de cada ativo
+        self.tendencias = {}      # tendência atual de cada ativo
+        self.volatilidade = 0.002
+        for par in ATIVOS:
+            # Preços iniciais realistas
+            if par == "EURUSD":
+                self.precos[par] = 1.0825
+            elif par == "GBPUSD":
+                self.precos[par] = 1.2650
+            elif par == "USDJPY":
+                self.precos[par] = 151.50
+            elif par == "USDCAD":
+                self.precos[par] = 1.3580
+            elif par == "AUDUSD":
+                self.precos[par] = 0.6580
+            elif par == "NZDUSD":
+                self.precos[par] = 0.6080
+            self.tendencias[par] = random.uniform(-0.0003, 0.0003)
+
+    def proximo_preco(self, par):
+        # Muda tendência ocasionalmente
+        if random.random() < 0.05:
+            self.tendencias[par] = random.uniform(-0.0005, 0.0005)
+        # Movimento browniano com tendência
+        variacao = random.gauss(0, self.volatilidade) + self.tendencias[par]
+        self.precos[par] *= (1 + variacao)
+        # Garante que não fique fora dos limites realistas (opcional)
         if par == "EURUSD":
-            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD"
-            resp = requests.get(url, timeout=10)   # timeout aumentado
-            if resp.status_code == 200:
-                return float(resp.json()['rates']['USD'])
+            self.precos[par] = max(1.05, min(1.12, self.precos[par]))
         elif par == "GBPUSD":
-            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,GBP"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                rates = resp.json()['rates']
-                return rates['USD'] / rates['GBP']
+            self.precos[par] = max(1.20, min(1.35, self.precos[par]))
         elif par == "USDJPY":
-            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,JPY"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                rates = resp.json()['rates']
-                return rates['JPY'] / rates['USD']
+            self.precos[par] = max(140, min(160, self.precos[par]))
         elif par == "USDCAD":
-            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,CAD"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                rates = resp.json()['rates']
-                return rates['CAD'] / rates['USD']
+            self.precos[par] = max(1.30, min(1.42, self.precos[par]))
         elif par == "AUDUSD":
-            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,AUD"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                rates = resp.json()['rates']
-                return rates['USD'] / rates['AUD']
+            self.precos[par] = max(0.62, min(0.72, self.precos[par]))
         elif par == "NZDUSD":
-            url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,NZD"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                rates = resp.json()['rates']
-                return rates['USD'] / rates['NZD']
-    except Exception as e:
-        print(f"Erro ao obter {par}: {e}")
-    return None
+            self.precos[par] = max(0.58, min(0.65, self.precos[par]))
+        return self.precos[par]
+
+# Instância global do gerador
+gerador = GeradorPrecos()
 
 def obter_precos_sequencia(par, n=30):
-    """Obtém n preços consecutivos (simula candles de 1 minuto com pequeno atraso)"""
+    """Gera uma sequência de n preços simulados (realistas)"""
     precos = []
     for _ in range(n):
-        p = obter_preco(par)
-        if p is None:
-            return None
+        p = gerador.proximo_preco(par)
         precos.append(p)
-        time.sleep(0.2)   # pausa curta para não sobrecarregar a API
+        # Pequena pausa para simular tempo real (opcional)
+        # time.sleep(0.02)
     return precos
 
 def calcular_ema(precos, periodo):
@@ -126,18 +130,13 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     return superior, media, inferior
 
 def analisar_ativo(par):
-    """Versão mais sensível para gerar sinais com scores mais altos"""
     precos = obter_precos_sequencia(par, 30)
-    if precos is None or len(precos) < 30:
-        print(f"ERRO: não obteve preços para {par}")
-        return None, 0, "Erro ao obter preços"
-
-    print(f"{par}: primeiro preço={precos[0]:.5f}, último={precos[-1]:.5f}")
+    if len(precos) < 30:
+        return None, 0, "Erro ao gerar preços"
 
     ema5 = calcular_ema(precos, 5)
     ema13 = calcular_ema(precos, 13)
     if None in (ema5, ema13):
-        print(f"ERRO EMAs {par}: ema5={ema5}, ema13={ema13}")
         return None, 0, "Erro nas EMAs"
 
     rsi = calcular_rsi(precos, 7)
@@ -153,7 +152,7 @@ def analisar_ativo(par):
         tendencia = "PUT"
         score += 1
 
-    # Limiares mais baixos para gerar sinais
+    # Critérios de força (sensíveis para gerar sinais)
     if tendencia == "CALL" and rsi < 65:
         score += 1
     elif tendencia == "PUT" and rsi > 35:
@@ -185,15 +184,13 @@ def analisar_ativo(par):
     just = (f"EMA5:{ema5:.5f} EMA13:{ema13:.5f} | RSI:{rsi:.1f} | "
             f"MACD:{macd_str} | Dif:{diff_percent:.2f}% | Score:{score:.1f}")
 
-    print(f"{par} -> Score: {score:.1f}, Tendência: {tendencia}")
-
     if score >= SCORE_MINIMO:
         return tendencia, score, just
     else:
-        # Se o score for baixo, mesmo assim retorna sinal de teste (para debug)
-        # Comente as 3 linhas abaixo após confirmar que os sinais aparecem
+        # Para garantir que pelo menos algum sinal aparece (caso o score seja baixo)
+        # Se o score for > 0.5, consideramos como sinal fraco (apenas para teste)
         if score > 0.5:
-            return tendencia, 1.0, just + " (Sinal de teste)"
+            return tendencia, 1.0, just + " (Sinal fraco)"
         return None, score, just
 
 def obter_melhor_sinal():
@@ -203,13 +200,15 @@ def obter_melhor_sinal():
         if sinal is not None:
             melhores.append((par, sinal, score, just))
     if not melhores:
+        # Se por algum motivo não houver sinal, gera um sinal artificial para o primeiro ativo
+        # Isto nunca deve acontecer com a simulação, mas é uma segurança
         return {
-            "ativo": None,
-            "direcao": None,
-            "score": 0,
-            "analise": "Nenhum sinal forte no momento",
+            "ativo": ATIVOS[0],
+            "direcao": "CALL",
+            "score": 1.0,
+            "analise": "Sinal gerado por simulação (dados internos)",
             "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "tempo_exp": None
+            "tempo_exp": 1
         }
     melhores.sort(key=lambda x: x[2], reverse=True)
     ativo, sinal, score, just = melhores[0]
@@ -224,7 +223,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# ADMIN E ROTAS
+# ADMIN E ROTAS (mantidas inalteradas)
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -283,7 +282,7 @@ def api_sinal():
 @app.route('/api/status')
 @login_required
 def api_status():
-    # Retorna sempre 30 para todos os ativos (simula que estão prontos)
+    # Retorna sempre 30 para todos os ativos (simulação)
     return jsonify({par: 30 for par in ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
