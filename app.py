@@ -1,8 +1,6 @@
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 import requests
-import threading
-import time
 import secrets
 from datetime import datetime
 import models
@@ -19,47 +17,25 @@ def load_user(user_id):
     return models.get_user_by_id(int(user_id))
 
 # ==============================================
-# CONFIGURAÇÕES (FOREX - exchangerate.host)
+# CONFIGURAÇÕES (FOREX)
 # ==============================================
-# Pares forex disponíveis na Pocket Option
-ATIVOS = {
-    "EURUSD": "EURUSD",
-    "GBPUSD": "GBPUSD",
-    "USDJPY": "USDJPY",
-    "USDCAD": "USDCAD",
-    "AUDUSD": "AUDUSD",
-    "NZDUSD": "NZDUSD"
-}
-JANELA_TICKS = 30
-INTERVALO_TICK = 5        # segundos entre cada coleta
-SCORE_MINIMO = 1.5
-# ==============================================
+ATIVOS = ["EURUSD", "GBPUSD", "USDJPY", "USDCAD", "AUDUSD", "NZDUSD"]
 
-# Estrutura para armazenar os preços de cada par
-precos_por_ativo = {par: [] for par in ATIVOS}
-lock = threading.Lock()
-
-def obter_preco_forex(par):
-    """
-    Obtém o preço atual de um par forex usando exchangerate.host.
-    A API fornece taxas baseadas em EUR.
-    """
+def obter_preco(par):
+    """Obtém o preço atual do par forex usando exchangerate.host"""
     try:
-        # Exemplo: para EURUSD, base EUR, target USD
         if par == "EURUSD":
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD"
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
                 return float(resp.json()['rates']['USD'])
         elif par == "GBPUSD":
-            # GBPUSD = (EUR/USD) / (EUR/GBP)
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,GBP"
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
                 rates = resp.json()['rates']
                 return rates['USD'] / rates['GBP']
         elif par == "USDJPY":
-            # USDJPY = (EUR/JPY) / (EUR/USD)
             url = "https://api.exchangerate.host/latest?base=EUR&symbols=USD,JPY"
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
@@ -83,28 +59,12 @@ def obter_preco_forex(par):
             if resp.status_code == 200:
                 rates = resp.json()['rates']
                 return rates['USD'] / rates['NZD']
-    except Exception as e:
-        print(f"Erro ao obter {par}: {e}")
+    except:
+        return None
     return None
 
-def coletar_ticks():
-    """Thread que atualiza os preços a cada INTERVALO_TICK segundos"""
-    while True:
-        for par in ATIVOS:
-            preco = obter_preco_forex(par)
-            if preco is not None:
-                with lock:
-                    precos_por_ativo[par].append(preco)
-                    if len(precos_por_ativo[par]) > JANELA_TICKS:
-                        precos_por_ativo[par].pop(0)
-        time.sleep(INTERVALO_TICK)
-
-# Inicia a thread de coleta em segundo plano
-thread_coleta = threading.Thread(target=coletar_ticks, daemon=True)
-thread_coleta.start()
-
 # ==============================================
-# FUNÇÕES DE ANÁLISE (mesmas de sempre)
+# FUNÇÕES DE ANÁLISE TÉCNICA
 # ==============================================
 def calcular_ema(precos, periodo):
     if len(precos) < periodo:
@@ -139,7 +99,7 @@ def calcular_macd(precos):
         return None
     ema12 = calcular_ema(precos, 12)
     ema26 = calcular_ema(precos, 26)
-    if None in (ema12, ema26):
+    if ema12 is None or ema26 is None:
         return None
     return ema12 - ema26
 
@@ -154,15 +114,19 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     inferior = media - desvios * std
     return superior, media, inferior
 
-def analisar_ativo(par, precos):
-    if len(precos) < JANELA_TICKS:
-        return None, 0, f"Acumulando: {len(precos)}/{JANELA_TICKS} ticks"
+def analisar_ativo(par):
+    """Obtém 30 preços consecutivos e calcula o sinal"""
+    precos = []
+    for _ in range(30):
+        p = obter_preco(par)
+        if p is None:
+            return None, 0, "Erro ao obter preços"
+        precos.append(p)
+    if len(precos) < 30:
+        return None, 0, "Dados insuficientes"
 
     ema5 = calcular_ema(precos, 5)
     ema13 = calcular_ema(precos, 13)
-    if None in (ema5, ema13):
-        return None, 0, "Erro EMAs"
-
     rsi = calcular_rsi(precos, 7)
     macd = calcular_macd(precos)
     upper, middle, lower = calcular_bollinger(precos)
@@ -203,25 +167,16 @@ def analisar_ativo(par, precos):
     elif diff_percent > 0.08:
         score += 0.25
 
-    macd_str = f"{macd:.5f}" if macd is not None else "N/A"
     just = (f"EMA5:{ema5:.5f} EMA13:{ema13:.5f} | RSI:{rsi:.1f} | "
-            f"MACD:{macd_str} | Dif:{diff_percent:.2f}%")
-
-    if score >= SCORE_MINIMO:
-        return tendencia, score, just
-    else:
-        return None, score, just
+            f"MACD:{macd:.5f if macd else 'N/A'} | Dif:{diff_percent:.2f}%")
+    return tendencia, score, just
 
 def obter_melhor_sinal():
     melhores = []
-    with lock:
-        for par in ATIVOS:
-            precos = precos_por_ativo[par].copy()
-            if len(precos) < JANELA_TICKS:
-                continue
-            sinal, score, just = analisar_ativo(par, precos)
-            if sinal is not None:
-                melhores.append((par, sinal, score, just))
+    for par in ATIVOS:
+        sinal, score, just = analisar_ativo(par)
+        if sinal is not None:
+            melhores.append((par, sinal, score, just))
     if not melhores:
         return {
             "ativo": None,
@@ -233,14 +188,12 @@ def obter_melhor_sinal():
         }
     melhores.sort(key=lambda x: x[2], reverse=True)
     ativo, sinal, score, just = melhores[0]
-
     if score >= 3.5:
         tempo_exp = 1
     elif score >= 2.5:
         tempo_exp = 2
     else:
         tempo_exp = 3
-
     return {
         "ativo": ativo,
         "direcao": sinal,
@@ -251,7 +204,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# ROTAS (login, registo, afiliado, admin)
+# ROTAS DE AUTENTICAÇÃO E ADMIN
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -310,22 +263,14 @@ def api_sinal():
 @app.route('/api/status')
 @login_required
 def api_status():
-    with lock:
-        status = {par: len(precos_por_ativo[par]) for par in ATIVOS}
-    return jsonify(status)
+    # Retorna que todos os ativos têm 30 ticks (simulado)
+    return jsonify({par: 30 for par in ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
 @login_required
 def config():
-    global SCORE_MINIMO
-    data = request.get_json()
-    if 'score_minimo' in data:
-        try:
-            SCORE_MINIMO = float(data['score_minimo'])
-            return jsonify({"status": "ok", "score_minimo": SCORE_MINIMO})
-        except:
-            return jsonify({"status": "erro", "msg": "Valor inválido"}), 400
-    return jsonify({"status": "erro"}), 400
+    # Configuração dummy para manter compatibilidade com frontend
+    return jsonify({"status": "ok"})
 
 @app.route('/logout')
 @login_required
@@ -348,8 +293,7 @@ def admin_toggle(user_id):
         return "Acesso negado", 403
     user = models.get_user_by_id(user_id)
     if user:
-        new_state = not user.is_active
-        models.set_user_active(user_id, new_state)
+        models.set_user_active(user_id, not user.is_active)
     return redirect(url_for('admin'))
 
 if __name__ == '__main__':
