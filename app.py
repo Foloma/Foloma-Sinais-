@@ -1,6 +1,8 @@
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 import requests
+import threading
+import time
 import secrets
 from datetime import datetime
 import models
@@ -17,9 +19,8 @@ def load_user(user_id):
     return models.get_user_by_id(int(user_id))
 
 # ==============================================
-# CONFIGURAÇÕES DOS SINAIS (CoinCap)
+# CONFIGURAÇÕES DOS SINAIS (CoinCap + ticks)
 # ==============================================
-# Mapeamento: símbolo CoinCap -> nome amigável (Pocket Option)
 ATIVOS = {
     "bitcoin": "BTCUSD",
     "ethereum": "ETHUSD",
@@ -33,43 +34,45 @@ ATIVOS = {
     "avalanche": "AVAXUSD"
 }
 JANELA_TICKS = 30
+INTERVALO_TICK = 5        # segundos entre cada coleta
 SCORE_MINIMO = 1.5
 # ==============================================
 
-def obter_precos_coincap(simbolo_coincap, limite=30):
-    """
-    Obtém os preços históricos (candles de 1 minuto) da CoinCap.
-    Nota: A CoinCap não fornece candles históricos gratuitamente.
-    Para contornar, obtemos o preço atual e simulamos uma pequena variação?
-    Não é ideal. Melhor usar o endpoint /assets para preço atual e acumular ticks.
-    Vamos usar uma abordagem de ticks: cada chamada obtém o preço atual e guardamos numa lista.
-    Mas como a API é chamada apenas quando o utilizador clica, precisamos de um acumulador persistente.
-    Solução mais simples: usar o preço atual e gerar uma pequena variação aleatória para formar a janela.
-    Isso é aceitável para demonstração, mas para produção real, uma fonte de candles é melhor.
-    Como o CoinCap não fornece candles, vamos usar a **Binance** novamente, mas com um truque: 
-    usar o domínio 'https://api1.binance.com' que costuma funcionar melhor.
-    Vou optar por uma solução híbrida: usar a Binance com um domínio que geralmente não é bloqueado.
-    """
-    # Domínios alternativos da Binance (tentar vários)
-    dominios = [
-        "https://api.binance.com",
-        "https://api1.binance.com",
-        "https://api2.binance.com",
-        "https://api3.binance.com"
-    ]
-    for dominio in dominios:
-        try:
-            url = f"{dominio}/api/v3/klines?symbol={simbolo_coincap.upper()}USDT&interval=1m&limit={limite}"
-            resp = requests.get(url, timeout=5)
-            if resp.status_code == 200:
-                dados = resp.json()
-                precos = [float(candle[4]) for candle in dados]
-                return precos
-        except:
-            continue
-    # Se todos falharem, retorna None
+# Estrutura para armazenar os preços de cada ativo (lista circular)
+precos_por_ativo = {simbolo: [] for simbolo in ATIVOS}
+lock = threading.Lock()
+
+def obter_preco_coincap(simbolo_coincap):
+    """Obtém o preço atual de uma criptomoeda via CoinCap (gratuito, sem chave)"""
+    try:
+        url = f"https://api.coincap.io/v2/assets/{simbolo_coincap}"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            dados = resp.json()
+            return float(dados['data']['priceUsd'])
+    except Exception as e:
+        print(f"Erro CoinCap ({simbolo_coincap}): {e}")
     return None
 
+def coletar_ticks():
+    """Thread que atualiza os preços a cada INTERVALO_TICK segundos"""
+    while True:
+        for simbolo_coincap, nome_pocket in ATIVOS.items():
+            preco = obter_preco_coincap(simbolo_coincap)
+            if preco is not None:
+                with lock:
+                    precos_por_ativo[simbolo_coincap].append(preco)
+                    if len(precos_por_ativo[simbolo_coincap]) > JANELA_TICKS:
+                        precos_por_ativo[simbolo_coincap].pop(0)
+        time.sleep(INTERVALO_TICK)
+
+# Inicia a thread de coleta em segundo plano
+thread_coleta = threading.Thread(target=coletar_ticks, daemon=True)
+thread_coleta.start()
+
+# ==============================================
+# FUNÇÕES DE ANÁLISE (mesmas de sempre)
+# ==============================================
 def calcular_ema(precos, periodo):
     if len(precos) < periodo:
         return None
@@ -118,9 +121,9 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     inferior = media - desvios * std
     return superior, media, inferior
 
-def analisar_ativo(simbolo, nome_pocket, precos):
+def analisar_ativo(simbolo_coincap, nome_pocket, precos):
     if len(precos) < JANELA_TICKS:
-        return None, 0, f"Acumulando: {len(precos)}/{JANELA_TICKS} candles"
+        return None, 0, f"Acumulando: {len(precos)}/{JANELA_TICKS} ticks"
 
     ema5 = calcular_ema(precos, 5)
     ema13 = calcular_ema(precos, 13)
@@ -178,16 +181,14 @@ def analisar_ativo(simbolo, nome_pocket, precos):
 
 def obter_melhor_sinal():
     melhores = []
-    for simbolo, nome_pocket in ATIVOS.items():
-        # Mapeia o símbolo da CoinCap para o símbolo da Binance (com USDT)
-        # Ex: bitcoin -> BTCUSDT
-        simbolo_binance = simbolo.upper().replace("-", "") + "USDT"
-        precos = obter_precos_coincap(simbolo_binance, JANELA_TICKS)
-        if precos is None:
-            continue
-        sinal, score, just = analisar_ativo(simbolo_binance, nome_pocket, precos)
-        if sinal is not None:
-            melhores.append((nome_pocket, sinal, score, just))
+    with lock:
+        for simbolo_coincap, nome_pocket in ATIVOS.items():
+            precos = precos_por_ativo[simbolo_coincap].copy()
+            if len(precos) < JANELA_TICKS:
+                continue
+            sinal, score, just = analisar_ativo(simbolo_coincap, nome_pocket, precos)
+            if sinal is not None:
+                melhores.append((nome_pocket, sinal, score, just))
     if not melhores:
         return {
             "ativo": None,
@@ -217,7 +218,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# CRIA ADMIN SE NÃO EXISTIR
+# ROTAS (login, registo, afiliado, etc.)
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -227,9 +228,6 @@ def create_admin_if_not_exists():
 
 create_admin_if_not_exists()
 
-# ==============================================
-# ROTAS PÚBLICAS
-# ==============================================
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -266,9 +264,6 @@ def register():
                 flash('Nome de utilizador já existe')
     return render_template('register.html')
 
-# ==============================================
-# ROTAS PROTEGIDAS
-# ==============================================
 @app.route('/')
 @login_required
 def index():
@@ -282,11 +277,10 @@ def api_sinal():
 @app.route('/api/status')
 @login_required
 def api_status():
-    status = {}
-    for simbolo, nome_pocket in ATIVOS.items():
-        simbolo_binance = simbolo.upper().replace("-", "") + "USDT"
-        precos = obter_precos_coincap(simbolo_binance, JANELA_TICKS)
-        status[nome_pocket] = len(precos) if precos else 0
+    with lock:
+        status = {}
+        for simbolo_coincap, nome_pocket in ATIVOS.items():
+            status[nome_pocket] = len(precos_por_ativo[simbolo_coincap])
     return jsonify(status)
 
 @app.route('/api/config', methods=['POST'])
@@ -328,4 +322,4 @@ def admin_toggle(user_id):
     return redirect(url_for('admin'))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)    
+    app.run(host='0.0.0.0', port=5000, debug=False)
