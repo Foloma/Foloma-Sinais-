@@ -19,51 +19,52 @@ def load_user(user_id):
     return models.get_user_by_id(int(user_id))
 
 # ==============================================
-# CONFIGURAÇÕES DOS SINAIS (CoinCap + ticks)
+# CONFIGURAÇÕES DOS SINAIS (CoinPaprika)
 # ==============================================
+# Mapeamento: ID CoinPaprika -> nome amigável (Pocket Option)
 ATIVOS = {
-    "bitcoin": "BTCUSD",
-    "ethereum": "ETHUSD",
-    "binance-coin": "BNBUSD",
-    "cardano": "ADAUSD",
-    "solana": "SOLUSD",
-    "litecoin": "LTCUSD",
-    "chainlink": "LINKUSD",
-    "polkadot": "DOTUSD",
-    "tron": "TRXUSD",
-    "avalanche": "AVAXUSD"
+    "btc-bitcoin": "BTCUSD",
+    "eth-ethereum": "ETHUSD",
+    "bnb-binance-coin": "BNBUSD",
+    "ada-cardano": "ADAUSD",
+    "sol-solana": "SOLUSD",
+    "ltc-litecoin": "LTCUSD",
+    "link-chainlink": "LINKUSD",
+    "dot-polkadot": "DOTUSD",
+    "tron-trx": "TRXUSD",
+    "avax-avalanche": "AVAXUSD"
 }
 JANELA_TICKS = 30
 INTERVALO_TICK = 5        # segundos entre cada coleta
 SCORE_MINIMO = 1.5
 # ==============================================
 
-# Estrutura para armazenar os preços de cada ativo (lista circular)
+# Estrutura para armazenar os preços de cada ativo
 precos_por_ativo = {simbolo: [] for simbolo in ATIVOS}
 lock = threading.Lock()
 
-def obter_preco_coincap(simbolo_coincap):
-    """Obtém o preço atual de uma criptomoeda via CoinCap (gratuito, sem chave)"""
+def obter_preco_coinpaprika(id_moeda):
+    """Obtém o preço atual de uma criptomoeda via CoinPaprika"""
     try:
-        url = f"https://api.coincap.io/v2/assets/{simbolo_coincap}"
+        url = f"https://api.coinpaprika.com/v1/tickers/{id_moeda}"
         resp = requests.get(url, timeout=5)
         if resp.status_code == 200:
             dados = resp.json()
-            return float(dados['data']['priceUsd'])
+            return float(dados['quotes']['USD']['price'])
     except Exception as e:
-        print(f"Erro CoinCap ({simbolo_coincap}): {e}")
+        print(f"Erro CoinPaprika ({id_moeda}): {e}")
     return None
 
 def coletar_ticks():
     """Thread que atualiza os preços a cada INTERVALO_TICK segundos"""
     while True:
-        for simbolo_coincap, nome_pocket in ATIVOS.items():
-            preco = obter_preco_coincap(simbolo_coincap)
+        for id_moeda, nome_pocket in ATIVOS.items():
+            preco = obter_preco_coinpaprika(id_moeda)
             if preco is not None:
                 with lock:
-                    precos_por_ativo[simbolo_coincap].append(preco)
-                    if len(precos_por_ativo[simbolo_coincap]) > JANELA_TICKS:
-                        precos_por_ativo[simbolo_coincap].pop(0)
+                    precos_por_ativo[id_moeda].append(preco)
+                    if len(precos_por_ativo[id_moeda]) > JANELA_TICKS:
+                        precos_por_ativo[id_moeda].pop(0)
         time.sleep(INTERVALO_TICK)
 
 # Inicia a thread de coleta em segundo plano
@@ -121,7 +122,7 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     inferior = media - desvios * std
     return superior, media, inferior
 
-def analisar_ativo(simbolo_coincap, nome_pocket, precos):
+def analisar_ativo(id_moeda, nome_pocket, precos):
     if len(precos) < JANELA_TICKS:
         return None, 0, f"Acumulando: {len(precos)}/{JANELA_TICKS} ticks"
 
@@ -182,11 +183,11 @@ def analisar_ativo(simbolo_coincap, nome_pocket, precos):
 def obter_melhor_sinal():
     melhores = []
     with lock:
-        for simbolo_coincap, nome_pocket in ATIVOS.items():
-            precos = precos_por_ativo[simbolo_coincap].copy()
+        for id_moeda, nome_pocket in ATIVOS.items():
+            precos = precos_por_ativo[id_moeda].copy()
             if len(precos) < JANELA_TICKS:
                 continue
-            sinal, score, just = analisar_ativo(simbolo_coincap, nome_pocket, precos)
+            sinal, score, just = analisar_ativo(id_moeda, nome_pocket, precos)
             if sinal is not None:
                 melhores.append((nome_pocket, sinal, score, just))
     if not melhores:
@@ -218,7 +219,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# ROTAS (login, registo, afiliado, etc.)
+# CRIA ADMIN E ROTAS (mantidas iguais)
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -279,8 +280,8 @@ def api_sinal():
 def api_status():
     with lock:
         status = {}
-        for simbolo_coincap, nome_pocket in ATIVOS.items():
-            status[nome_pocket] = len(precos_por_ativo[simbolo_coincap])
+        for id_moeda, nome_pocket in ATIVOS.items():
+            status[nome_pocket] = len(precos_por_ativo[id_moeda])
     return jsonify(status)
 
 @app.route('/api/config', methods=['POST'])
