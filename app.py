@@ -1,8 +1,8 @@
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+import requests
 import secrets
-import random
-import time
+import os
 from datetime import datetime
 import models
 
@@ -18,67 +18,41 @@ def load_user(user_id):
     return models.get_user_by_id(int(user_id))
 
 # ==============================================
-# CONFIGURAÇÕES (SIMULAÇÃO REALISTA)
+# CONFIGURAÇÕES (TWELVE DATA)
 # ==============================================
-ATIVOS = ["EURUSD", "GBPUSD", "USDJPY", "USDCAD", "AUDUSD", "NZDUSD"]
-SCORE_MINIMO = 1.0
+API_KEY = os.environ.get('TWELVE_DATA_KEY', '')  # Coloque a sua chave nas variáveis de ambiente
+ATIVOS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "NZD/USD"]
+SCORE_MINIMO = 1.5
 # ==============================================
 
-# Simulador de preços (random walk com tendência)
-class GeradorPrecos:
-    def __init__(self):
-        self.precos = {}          # guarda o último preço de cada ativo
-        self.tendencias = {}      # tendência atual de cada ativo
-        self.volatilidade = 0.002
-        for par in ATIVOS:
-            # Preços iniciais realistas
-            if par == "EURUSD":
-                self.precos[par] = 1.0825
-            elif par == "GBPUSD":
-                self.precos[par] = 1.2650
-            elif par == "USDJPY":
-                self.precos[par] = 151.50
-            elif par == "USDCAD":
-                self.precos[par] = 1.3580
-            elif par == "AUDUSD":
-                self.precos[par] = 0.6580
-            elif par == "NZDUSD":
-                self.precos[par] = 0.6080
-            self.tendencias[par] = random.uniform(-0.0003, 0.0003)
-
-    def proximo_preco(self, par):
-        # Muda tendência ocasionalmente
-        if random.random() < 0.05:
-            self.tendencias[par] = random.uniform(-0.0005, 0.0005)
-        # Movimento browniano com tendência
-        variacao = random.gauss(0, self.volatilidade) + self.tendencias[par]
-        self.precos[par] *= (1 + variacao)
-        # Garante que não fique fora dos limites realistas (opcional)
-        if par == "EURUSD":
-            self.precos[par] = max(1.05, min(1.12, self.precos[par]))
-        elif par == "GBPUSD":
-            self.precos[par] = max(1.20, min(1.35, self.precos[par]))
-        elif par == "USDJPY":
-            self.precos[par] = max(140, min(160, self.precos[par]))
-        elif par == "USDCAD":
-            self.precos[par] = max(1.30, min(1.42, self.precos[par]))
-        elif par == "AUDUSD":
-            self.precos[par] = max(0.62, min(0.72, self.precos[par]))
-        elif par == "NZDUSD":
-            self.precos[par] = max(0.58, min(0.65, self.precos[par]))
-        return self.precos[par]
-
-# Instância global do gerador
-gerador = GeradorPrecos()
+def obter_preco_twelve(par):
+    """Obtém o preço atual de um par forex via Twelve Data"""
+    try:
+        # Twelve Data usa símbolos como 'EUR/USD'
+        url = f"https://api.twelvedata.com/price?symbol={par}&apikey={API_KEY}"
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            dados = resp.json()
+            if 'price' in dados:
+                return float(dados['price'])
+            else:
+                print(f"Erro Twelve Data: {dados}")
+    except Exception as e:
+        print(f"Erro ao obter {par}: {e}")
+    return None
 
 def obter_precos_sequencia(par, n=30):
-    """Gera uma sequência de n preços simulados (realistas)"""
+    """Obtém n preços consecutivos (um a cada 0.2 segundos)"""
     precos = []
     for _ in range(n):
-        p = gerador.proximo_preco(par)
+        p = obter_preco_twelve(par)
+        if p is None:
+            return None
         precos.append(p)
-        # Pequena pausa para simular tempo real (opcional)
-        # time.sleep(0.02)
+        # Pequeno intervalo para não exceder limites da API
+        # 30 chamadas * 0.2 = 6 segundos, dentro do limite de 8 chamadas/segundo
+        import time
+        time.sleep(0.2)
     return precos
 
 def calcular_ema(precos, periodo):
@@ -114,7 +88,7 @@ def calcular_macd(precos):
         return None
     ema12 = calcular_ema(precos, 12)
     ema26 = calcular_ema(precos, 26)
-    if ema12 is None or ema26 is None:
+    if None in (ema12, ema26):
         return None
     return ema12 - ema26
 
@@ -131,8 +105,8 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
 
 def analisar_ativo(par):
     precos = obter_precos_sequencia(par, 30)
-    if len(precos) < 30:
-        return None, 0, "Erro ao gerar preços"
+    if precos is None or len(precos) < 30:
+        return None, 0, "Erro ao obter preços"
 
     ema5 = calcular_ema(precos, 5)
     ema13 = calcular_ema(precos, 13)
@@ -152,32 +126,31 @@ def analisar_ativo(par):
         tendencia = "PUT"
         score += 1
 
-    # Critérios de força (sensíveis para gerar sinais)
-    if tendencia == "CALL" and rsi < 65:
+    if tendencia == "CALL" and rsi < 55:
         score += 1
-    elif tendencia == "PUT" and rsi > 35:
+    elif tendencia == "PUT" and rsi > 45:
         score += 1
-    elif tendencia == "CALL" and rsi < 75:
+    elif tendencia == "CALL" and rsi < 65:
         score += 0.5
-    elif tendencia == "PUT" and rsi > 25:
+    elif tendencia == "PUT" and rsi > 35:
         score += 0.5
 
     if macd is not None:
-        if tendencia == "CALL" and macd > -0.0001:
+        if tendencia == "CALL" and macd > 0:
             score += 0.5
-        elif tendencia == "PUT" and macd < 0.0001:
+        elif tendencia == "PUT" and macd < 0:
             score += 0.5
 
     if upper is not None:
-        if tendencia == "CALL" and preco_atual <= lower * 1.01:
+        if tendencia == "CALL" and preco_atual <= lower * 1.001:
             score += 0.5
-        elif tendencia == "PUT" and preco_atual >= upper * 0.99:
+        elif tendencia == "PUT" and preco_atual >= upper * 0.999:
             score += 0.5
 
     diff_percent = abs(ema5 - ema13) / ema13 * 100
-    if diff_percent > 0.05:
+    if diff_percent > 0.15:
         score += 0.5
-    elif diff_percent > 0.02:
+    elif diff_percent > 0.08:
         score += 0.25
 
     macd_str = f"{macd:.5f}" if macd is not None else "N/A"
@@ -187,10 +160,6 @@ def analisar_ativo(par):
     if score >= SCORE_MINIMO:
         return tendencia, score, just
     else:
-        # Para garantir que pelo menos algum sinal aparece (caso o score seja baixo)
-        # Se o score for > 0.5, consideramos como sinal fraco (apenas para teste)
-        if score > 0.5:
-            return tendencia, 1.0, just + " (Sinal fraco)"
         return None, score, just
 
 def obter_melhor_sinal():
@@ -200,15 +169,13 @@ def obter_melhor_sinal():
         if sinal is not None:
             melhores.append((par, sinal, score, just))
     if not melhores:
-        # Se por algum motivo não houver sinal, gera um sinal artificial para o primeiro ativo
-        # Isto nunca deve acontecer com a simulação, mas é uma segurança
         return {
-            "ativo": ATIVOS[0],
-            "direcao": "CALL",
-            "score": 1.0,
-            "analise": "Sinal gerado por simulação (dados internos)",
+            "ativo": None,
+            "direcao": None,
+            "score": 0,
+            "analise": "Nenhum sinal forte no momento",
             "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "tempo_exp": 1
+            "tempo_exp": None
         }
     melhores.sort(key=lambda x: x[2], reverse=True)
     ativo, sinal, score, just = melhores[0]
@@ -223,7 +190,7 @@ def obter_melhor_sinal():
     }
 
 # ==============================================
-# ADMIN E ROTAS (mantidas inalteradas)
+# ADMIN E ROTAS (inalteradas)
 # ==============================================
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
@@ -282,7 +249,7 @@ def api_sinal():
 @app.route('/api/status')
 @login_required
 def api_status():
-    # Retorna sempre 30 para todos os ativos (simulação)
+    # Como não temos coleta contínua, retornamos 30 para todos (simula pronto)
     return jsonify({par: 30 for par in ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
