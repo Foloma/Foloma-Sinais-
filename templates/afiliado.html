@@ -42,6 +42,7 @@
         button:disabled { opacity: 0.5; cursor: not-allowed; }
         a { color: #fbbf24; }
         .footer-note { font-size: 12px; margin-top: 20px; color: #94a3b8; }
+        .disclaimer { font-size: 11px; color: #64748b; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -50,7 +51,7 @@
         <p><strong>Bem-vindo à plataforma de sinais de alta precisão!</strong></p>
         <p>Para aceder aos sinais exclusivos, precisa de uma conta gratuita na <strong>Pocket Option</strong>.</p>
         <p>Clique no botão abaixo e registe-se através do nosso link de parceria:</p>
-        <a href="https://pocket-friends.co/r/br4kbim2pe" target="_blank" class="btn">📈 Abrir Pocket Option</a>
+        <a href="{{ affiliate_link }}" target="_blank" rel="noopener noreferrer" class="btn">📈 Abrir Pocket Option</a>
         <div class="checkbox">
             <label>
                 <input type="checkbox" id="confirmacao"> ✅ Já me cadastrei através do link.
@@ -60,14 +61,24 @@
         <div class="footer-note">
             Este passo é obrigatório para manter a plataforma gratuita. Obrigado por apoiar o Foloma Visão 360!
         </div>
+        <div class="disclaimer">
+            ⚠️ Certifique-se de que se registou na Pocket Option através do link acima. Ao continuar, declara que cumpriu este passo.
+        </div>
     </div>
+
     <script>
         document.getElementById('confirmacao').addEventListener('change', function(e) {
             document.getElementById('continuar').disabled = !e.target.checked;
         });
+
         document.getElementById('continuar').addEventListener('click', function() {
+            // Definir cookie afiliado_confirmado com validade de 30 minutos
+            const now = new Date();
+            now.setTime(now.getTime() + 30 * 60 * 1000);
+            document.cookie = "afiliado_confirmado=1; expires=" + now.toUTCString() + "; path=/; SameSite=Lax";
+            // Redireccionar para a página de registo
             window.location.href = "{{ url_for('register') }}";
         });
     </script>
 </body>
-  </html>
+</html>
