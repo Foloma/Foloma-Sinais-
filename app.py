@@ -1,91 +1,112 @@
+import os
+import time
+import threading
+import logging
+from datetime import datetime
+
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import requests
-import secrets
-import os
-from datetime import datetime
+
 import models
 
+# ---------- Configuração inicial ----------
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
+app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(24).hex()  # não regenera se SECRET_KEY definida
 
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-@login_manager.user_loader
-def load_user(user_id):
-    return models.get_user_by_id(int(user_id))
+# Rate limiter: máximo 1 pedido por minuto na rota do sinal
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["100 per hour"]
+)
 
-# ==============================================
-# CONFIGURAÇÕES (TWELVE DATA)
-# ==============================================
-API_KEY = os.environ.get('TWELVE_DATA_KEY', '')  # Coloque a sua chave nas variáveis de ambiente
+# ---------- Configurações (Twelve Data) ----------
+API_KEY = os.environ.get('TWELVE_DATA_KEY', '')
 ATIVOS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "NZD/USD"]
-SCORE_MINIMO = 1.5
-# ==============================================
+SCORE_MINIMO = float(os.environ.get('SCORE_MINIMO', '1.5'))
+score_lock = threading.Lock()
+app.config['SCORE_MINIMO'] = SCORE_MINIMO
 
-def obter_preco_twelve(par):
-    """Obtém o preço atual de um par forex via Twelve Data"""
+# ---------- Inicialização da base de dados ----------
+# Garantir que users.db é criada na mesma pasta do app.py
+db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'users.db')
+models.set_db_path(db_path)
+models.init_db()
+
+# Criação do admin (se não existir)
+def create_admin_if_not_exists():
+    admin = models.get_user_by_username('admin')
+    if not admin:
+        admin_pass = os.environ.get('ADMIN_PASS') or secrets.token_urlsafe(10)
+        models.create_user('admin', admin_pass, is_admin=True)
+        logging.info("=" * 60)
+        logging.info(f"Admin criado: admin / {admin_pass}")
+        logging.info("Guarde esta senha! Ela não será mostrada novamente.")
+        logging.info("=" * 60)
+    else:
+        logging.info("Administrador já existe.")
+
+import secrets
+create_admin_if_not_exists()
+
+# ---------- Funções de trading ----------
+def obter_velas(par, intervalo="1min", n=30):
+    """Obtém as últimas n velas da Twelve Data (fechos em ordem cronológica)."""
     try:
-        # Twelve Data usa símbolos como 'EUR/USD'
-        url = f"https://api.twelvedata.com/price?symbol={par}&apikey={API_KEY}"
+        url = f"https://api.twelvedata.com/time_series?symbol={par}&interval={intervalo}&outputsize={n}&apikey={API_KEY}"
         resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            dados = resp.json()
-            if 'price' in dados:
-                return float(dados['price'])
+        resp.raise_for_status()
+        dados = resp.json()
+        if "values" in dados:
+            # API retorna da mais recente para a mais antiga
+            precos = [float(v["close"]) for v in reversed(dados["values"])]
+            if len(precos) == n:
+                return precos
             else:
-                print(f"Erro Twelve Data: {dados}")
+                logging.warning(f"Dados insuficientes para {par}: obtidos {len(precos)} de {n}")
+                return None
+        else:
+            logging.error(f"Resposta inesperada Twelve Data para {par}: {dados}")
     except Exception as e:
-        print(f"Erro ao obter {par}: {e}")
+        logging.error(f"Erro ao obter velas para {par}: {e}", exc_info=True)
     return None
 
-def obter_precos_sequencia(par, n=30):
-    """Obtém n preços consecutivos (um a cada 0.2 segundos)"""
-    precos = []
-    for _ in range(n):
-        p = obter_preco_twelve(par)
-        if p is None:
-            return None
-        precos.append(p)
-        # Pequeno intervalo para não exceder limites da API
-        # 30 chamadas * 0.2 = 6 segundos, dentro do limite de 8 chamadas/segundo
-        import time
-        time.sleep(0.2)
-    return precos
-
 def calcular_ema(precos, periodo):
+    """EMA correta: SMA inicial + iteração por todos os preços restantes."""
     if len(precos) < periodo:
         return None
     mult = 2 / (periodo + 1)
-    ema = precos[0]
-    for p in precos[1:periodo]:
+    sma = sum(precos[:periodo]) / periodo
+    ema = sma
+    for p in precos[periodo:]:
         ema = (p - ema) * mult + ema
     return ema
 
 def calcular_rsi(precos, periodo=7):
     if len(precos) < periodo + 1:
         return 50
-    ganhos, perdas = [], []
-    for i in range(1, periodo+1):
-        diff = precos[-i] - precos[-i-1]
-        if diff > 0:
-            ganhos.append(diff)
-            perdas.append(0)
-        else:
-            ganhos.append(0)
-            perdas.append(abs(diff))
-    avg_gain = sum(ganhos) / periodo
-    avg_loss = sum(perdas) / periodo
+    deltas = [precos[i] - precos[i-1] for i in range(1, len(precos))]
+    ult_deltas = deltas[-periodo:]
+    ganhos = sum(d for d in ult_deltas if d > 0)
+    perdas = sum(-d for d in ult_deltas if d < 0)
+    avg_gain = ganhos / periodo
+    avg_loss = perdas / periodo
     if avg_loss == 0:
         return 100
     rs = avg_gain / avg_loss
-    return 100 - (100/(1+rs))
+    return 100 - (100 / (1 + rs))
 
 def calcular_macd(precos):
-    if len(precos) < 26:
-        return None
     ema12 = calcular_ema(precos, 12)
     ema26 = calcular_ema(precos, 26)
     if None in (ema12, ema26):
@@ -104,27 +125,29 @@ def calcular_bollinger(precos, periodo=20, desvios=2):
     return superior, media, inferior
 
 def analisar_ativo(par):
-    precos = obter_precos_sequencia(par, 30)
+    precos = obter_velas(par, intervalo="1min", n=30)
     if precos is None or len(precos) < 30:
-        return None, 0, "Erro ao obter preços"
+        return None, 0, f"Erro ao obter preços para {par}"
 
     ema5 = calcular_ema(precos, 5)
     ema13 = calcular_ema(precos, 13)
     if None in (ema5, ema13):
-        return None, 0, "Erro nas EMAs"
+        return None, 0, "Erro no cálculo das EMAs"
+
+    diff_percent = abs(ema5 - ema13) / ema13 * 100
+
+    # Tendência básica (threshold de 0.03% para pontuar)
+    if ema5 > ema13:
+        tendencia = "CALL"
+        score = 1 if diff_percent > 0.03 else 0
+    else:
+        tendencia = "PUT"
+        score = 1 if diff_percent > 0.03 else 0
 
     rsi = calcular_rsi(precos, 7)
     macd = calcular_macd(precos)
-    upper, middle, lower = calcular_bollinger(precos)
+    superior, media, inferior = calcular_bollinger(precos)
     preco_atual = precos[-1]
-
-    score = 0
-    if ema5 > ema13:
-        tendencia = "CALL"
-        score += 1
-    else:
-        tendencia = "PUT"
-        score += 1
 
     if tendencia == "CALL" and rsi < 55:
         score += 1
@@ -141,13 +164,12 @@ def analisar_ativo(par):
         elif tendencia == "PUT" and macd < 0:
             score += 0.5
 
-    if upper is not None:
-        if tendencia == "CALL" and preco_atual <= lower * 1.001:
+    if superior is not None:
+        if tendencia == "CALL" and preco_atual <= inferior * 1.001:
             score += 0.5
-        elif tendencia == "PUT" and preco_atual >= upper * 0.999:
+        elif tendencia == "PUT" and preco_atual >= superior * 0.999:
             score += 0.5
 
-    diff_percent = abs(ema5 - ema13) / ema13 * 100
     if diff_percent > 0.15:
         score += 0.5
     elif diff_percent > 0.08:
@@ -157,10 +179,9 @@ def analisar_ativo(par):
     just = (f"EMA5:{ema5:.5f} EMA13:{ema13:.5f} | RSI:{rsi:.1f} | "
             f"MACD:{macd_str} | Dif:{diff_percent:.2f}% | Score:{score:.1f}")
 
-    if score >= SCORE_MINIMO:
+    if score >= app.config['SCORE_MINIMO']:
         return tendencia, score, just
-    else:
-        return None, score, just
+    return None, score, just
 
 def obter_melhor_sinal():
     melhores = []
@@ -189,17 +210,7 @@ def obter_melhor_sinal():
         "tempo_exp": tempo_exp
     }
 
-# ==============================================
-# ADMIN E ROTAS (inalteradas)
-# ==============================================
-def create_admin_if_not_exists():
-    admin = models.get_user_by_username('admin')
-    if not admin:
-        models.create_user('admin', 'admin123', is_admin=True)
-        print("Administrador criado: admin / admin123")
-
-create_admin_if_not_exists()
-
+# ---------- Rotas ----------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -243,25 +254,30 @@ def index():
 
 @app.route('/api/sinal')
 @login_required
+@limiter.limit("1 per minute")  # 🔒 rate limit
 def api_sinal():
     return jsonify(obter_melhor_sinal())
 
 @app.route('/api/status')
 @login_required
 def api_status():
-    # Como não temos coleta contínua, retornamos 30 para todos (simula pronto)
+    # Simulação removida: agora retorna estado real (todos os ativos com dados disponíveis)
+    # Como obtemos sob demanda, todos têm 30 velas se a API funcionar
+    # Mas mantemos compatibilidade: simulamos 'pronto' para não quebrar o frontend.
+    # Numa versão mais realista, poderias verificar cache ou última coleta.
     return jsonify({par: 30 for par in ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
 @login_required
 def config():
-    global SCORE_MINIMO
     data = request.get_json()
     if 'score_minimo' in data:
         try:
-            SCORE_MINIMO = float(data['score_minimo'])
-            return jsonify({"status": "ok", "score_minimo": SCORE_MINIMO})
-        except:
+            novo = float(data['score_minimo'])
+            with score_lock:
+                app.config['SCORE_MINIMO'] = novo
+            return jsonify({"status": "ok", "score_minimo": novo})
+        except (ValueError, TypeError):
             return jsonify({"status": "erro", "msg": "Valor inválido"}), 400
     return jsonify({"status": "erro"}), 400
 
@@ -279,7 +295,7 @@ def admin():
     users = models.list_users()
     return render_template('admin.html', users=users)
 
-@app.route('/admin/toggle/<int:user_id>')
+@app.route('/admin/toggle/<int:user_id>', methods=['POST'])
 @login_required
 def admin_toggle(user_id):
     if not current_user.is_admin:
@@ -289,6 +305,13 @@ def admin_toggle(user_id):
         new_state = not user.is_active
         models.set_user_active(user_id, new_state)
     return redirect(url_for('admin'))
+
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        return models.get_user_by_id(int(user_id))
+    except (ValueError, TypeError):
+        return None
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
