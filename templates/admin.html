@@ -19,6 +19,14 @@
             padding: 20px;
         }
         h1 { color: #fbbf24; }
+        .flash-message {
+            padding: 10px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
+        .success { background: #22c55e; color: #fff; }
+        .error { background: #ef4444; color: #fff; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
         th, td { padding: 10px; text-align: left; border-bottom: 1px solid #334155; }
         .btn {
@@ -34,32 +42,57 @@
         }
         .btn-danger { background: #ef4444; color: white; }
         .btn-success { background: #22c55e; color: white; }
+        .btn-disabled { background: #64748b; color: #cbd5e1; cursor: not-allowed; }
         .back { margin-top: 20px; display: inline-block; }
+        form.inline { display: inline; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>👑 Administração – Foloma Visão 360</h1>
+
+        <!-- Mensagens flash -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash-message {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
         <table>
             <thead>
-                <tr><th>ID</th><th>Utilizador</th><th>Admin</th><th>Activo</th><th>Ação</th></tr>
+                <tr>
+                    <th>ID</th>
+                    <th>Utilizador</th>
+                    <th>Admin</th>
+                    <th>Activo</th>
+                    <th>Ação</th>
+                </tr>
             </thead>
             <tbody>
                 {% for user in users %}
                 <tr>
-                    <td>{{ user[0] }}</td>
-                    <td>{{ user[1] }}</td>
-                    <td>{{ "Sim" if user[3] else "Não" }}</td>
-                    <td>{{ "Sim" if user[2] else "Não" }}</td>
+                    <td>{{ user['id'] }}</td>
+                    <td>{{ user['username'] }}</td>
+                    <td>{{ "Sim" if user['is_admin'] else "Não" }}</td>
+                    <td>{{ "Sim" if user['is_active'] else "Não" }}</td>
                     <td>
-                        <a href="{{ url_for('admin_toggle', user_id=user[0]) }}" class="btn {% if user[2] %}btn-danger{% else %}btn-success{% endif %}">
-                            {% if user[2] %}Desactivar{% else %}Activar{% endif %}
-                        </a>
+                        {% if user['id'] == current_user.id %}
+                            <span class="btn btn-disabled">Conta própria</span>
+                        {% else %}
+                        <form method="POST" action="{{ url_for('admin_toggle', user_id=user['id']) }}" class="inline"
+                              onsubmit="return confirm('Tem a certeza que deseja alterar o estado de {{ user['username'] }}?');">
+                            <button type="submit" class="btn {% if user['is_active'] %}btn-danger{% else %}btn-success{% endif %}">
+                                {% if user['is_active'] %}Desactivar{% else %}Activar{% endif %}
+                            </button>
+                        </form>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
             </tbody>
-         </table>
+        </table>
         <a href="{{ url_for('index') }}" class="btn back">Voltar</a>
     </div>
 </body>
