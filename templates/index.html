@@ -53,7 +53,13 @@
             margin-bottom: 30px;
             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);
         }
-        .btn-primary:hover { transform: scale(1.02); }
+        .btn-primary:disabled {
+            opacity: 0.6;
+            transform: none;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+        .btn-primary:hover:not(:disabled) { transform: scale(1.02); }
         .sinal-box {
             background: #0f172a;
             border-radius: 24px;
@@ -167,7 +173,7 @@
             <a href="{{ url_for('logout') }}">Sair</a>
         </div>
         <h1>📡 Foloma Visão 360 Sinais</h1>
-        <button class="btn-primary" id="btnGerarSinal">🔍 Gerar Sinal Agora</button>
+        <button class="btn-primary" id="btnGerarSinal" disabled>🔍 Gerar Sinal Agora</button>
 
         <div class="sinal-box" id="sinalBox">
             <div class="ativo">Clique em "Gerar Sinal"</div>
@@ -175,7 +181,7 @@
             <div class="score" id="scoreTexto">Score: --/5</div>
             <div class="analise" id="analiseTexto">Aguardando...</div>
             <div class="timer-box" id="timerBox" style="display: none;">
-                <div>⏰ Melhor momento para entrar:</div>
+                <div>⏰ Próximo momento de entrada:</div>
                 <div class="timer" id="timerContagem">--:--</div>
                 <div class="exp-sugestao" id="expSugestao"></div>
             </div>
@@ -221,7 +227,7 @@
         </div>
 
         <footer>
-            Dados em tempo real da Binance | Expiração dinâmica por score | Foloma Visão 360
+            Dados em tempo real da Twelve Data | Expiração dinâmica por score | Foloma Visão 360
         </footer>
     </div>
 
@@ -229,13 +235,25 @@
         let timerInterval = null;
         let ultimoSinal = null;
         let ultimoTradeId = null;
+        const btnGerar = document.getElementById('btnGerarSinal');
 
+        // ------------------- FUNÇÕES -------------------
         async function buscarSinal() {
+            // Estado de loading
+            btnGerar.disabled = true;
+            btnGerar.textContent = '⏳ Analisando...';
+            // Limpa qualquer trade pendente visualmente (os botões serão mostrados só depois do novo registo)
+            ultimoTradeId = null;
+            document.getElementById('tradeButtons').style.display = 'none';
+            document.getElementById('timerBox').style.display = 'none';
+            pararTimer();
+
             try {
                 const resp = await fetch('/api/sinal');
                 const data = await resp.json();
                 ultimoSinal = data;
                 atualizarInterface(data);
+
                 if (data.direcao && data.direcao !== '---') {
                     document.getElementById('timerBox').style.display = 'block';
                     let expTexto = '';
@@ -245,7 +263,7 @@
                     document.getElementById('expSugestao').innerText = expTexto;
                     iniciarTimer();
 
-                    // Regista o trade automaticamente (sem resultado ainda)
+                    // Regista o trade automaticamente (sem resultado)
                     const regResp = await fetch('/api/registar_trade', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -261,7 +279,8 @@
                         ultimoTradeId = regData.trade_id;
                         document.getElementById('tradeButtons').style.display = 'flex';
                     } else {
-                        console.error('Erro ao registar trade');
+                        console.error('Erro ao registar trade:', regData.msg);
+                        alert('Erro ao registar o trade. Tente novamente.');
                     }
                 } else {
                     document.getElementById('timerBox').style.display = 'none';
@@ -270,7 +289,10 @@
                 }
             } catch (e) {
                 console.error(e);
-                alert("Erro ao buscar sinal. Verifique o servidor.");
+                alert('Erro ao buscar sinal. Verifique o servidor.');
+            } finally {
+                btnGerar.disabled = false;
+                btnGerar.textContent = '🔍 Gerar Sinal Agora';
             }
         }
 
@@ -292,10 +314,9 @@
                 const agora = new Date();
                 const segundosAgora = agora.getSeconds();
                 const segundosRestantes = 60 - segundosAgora;
-                document.getElementById('timerContagem').innerText = `${Math.floor(segundosRestantes/60)}:${(segundosRestantes % 60).toString().padStart(2,'0')}`;
-                if (segundosRestantes <= 1) {
-                    // Opcional: tocar som
-                }
+                const min = Math.floor(segundosRestantes / 60);
+                const seg = (segundosRestantes % 60).toString().padStart(2,'0');
+                document.getElementById('timerContagem').innerText = `${min}:${seg}`;
             }, 100);
         }
 
@@ -311,6 +332,9 @@
                 alert("Nenhum trade pendente. Gere um sinal primeiro.");
                 return;
             }
+            // Desabilitar botões durante o registo
+            document.getElementById('btnWin').disabled = true;
+            document.getElementById('btnLoss').disabled = true;
             try {
                 const resp = await fetch('/api/resultado_trade', {
                     method: 'POST',
@@ -324,13 +348,20 @@
                     window.location.reload();
                 } else {
                     alert('Erro ao registar resultado: ' + (data.msg || ''));
+                    // Reativar botões em caso de erro
+                    document.getElementById('btnWin').disabled = false;
+                    document.getElementById('btnLoss').disabled = false;
                 }
             } catch (e) {
                 alert('Erro de comunicação');
+                document.getElementById('btnWin').disabled = false;
+                document.getElementById('btnLoss').disabled = false;
             }
         }
 
         async function atualizarStatus() {
+            // Endpoint simulado; mantido apenas para compatibilidade visual.
+            // Em produção, substituir por um status real (cache, etc.)
             try {
                 const resp = await fetch('/api/status');
                 const data = await resp.json();
@@ -343,11 +374,13 @@
                     container.appendChild(div);
                 }
             } catch (e) {
-                console.error(e);
+                console.error('Erro ao atualizar status:', e);
             }
         }
 
-        document.getElementById('btnGerarSinal').addEventListener('click', buscarSinal);
+        // ------------------- EVENTOS -------------------
+        btnGerar.addEventListener('click', buscarSinal);
+
         document.getElementById('btnConfig').addEventListener('click', async () => {
             const novoScore = parseFloat(document.getElementById('scoreMin').value);
             if (isNaN(novoScore)) return;
@@ -360,7 +393,7 @@
                 const result = await resp.json();
                 if (result.status === 'ok') {
                     alert(`Score mínimo alterado para ${result.score_minimo}`);
-                    buscarSinal();
+                    // Opcional: gerar novo sinal automaticamente
                 } else alert('Erro ao alterar score');
             } catch (e) { alert('Erro de comunicação'); }
         });
@@ -368,9 +401,12 @@
         document.getElementById('btnWin').addEventListener('click', () => registrarResultado('Ganhou'));
         document.getElementById('btnLoss').addEventListener('click', () => registrarResultado('Perdeu'));
 
+        // Polling de status (a cada 5 segundos)
         setInterval(atualizarStatus, 5000);
         atualizarStatus();
-        buscarSinal();
+
+        // Habilitar o botão de gerar sinal apenas depois de a página carregar completamente
+        btnGerar.disabled = false;
     </script>
 </body>
-  </html>
+</html>
