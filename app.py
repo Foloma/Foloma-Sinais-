@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import threading
 import secrets
@@ -17,7 +18,6 @@ import models
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ---------- App Factory ----------
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(24).hex()
 
@@ -25,20 +25,16 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Rate limiter (1 chamada por minuto na rota de sinal)
+# Rate limiter
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
     default_limits=["100 per hour"]
 )
 
-# ---------- Variáveis de ambiente ----------
+# ---------- Configurações (Twelve Data) ----------
 API_KEY = os.environ.get('TWELVE_DATA_KEY', '')
-if not API_KEY:
-    logging.warning("TWELVE_DATA_KEY não definida! As chamadas à API vão falhar.")
-
 ATIVOS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "NZD/USD"]
-
 SCORE_MINIMO = float(os.environ.get('SCORE_MINIMO', '1.5'))
 score_lock = threading.Lock()
 app.config['SCORE_MINIMO'] = SCORE_MINIMO
@@ -51,14 +47,13 @@ db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'users.db')
 models.set_db_path(db_path)
 models.init_db()
 
-# Criação do admin (se não existir)
 def create_admin_if_not_exists():
     admin = models.get_user_by_username('admin')
     if not admin:
         admin_pass = os.environ.get('ADMIN_PASS') or secrets.token_urlsafe(10)
         models.create_user('admin', admin_pass, is_admin=True)
         logging.info("=" * 60)
-        logging.info(f"Administrador criado: admin / {admin_pass}")
+        logging.info(f"Admin criado: admin / {admin_pass}")
         logging.info("Guarde esta senha! Ela não será mostrada novamente.")
         logging.info("=" * 60)
     else:
@@ -66,7 +61,6 @@ def create_admin_if_not_exists():
 
 create_admin_if_not_exists()
 
-# ---------- Carregador de utilizador ----------
 @login_manager.user_loader
 def load_user(user_id):
     try:
@@ -74,11 +68,8 @@ def load_user(user_id):
     except (ValueError, TypeError):
         return None
 
-# ==============================================
-# FUNÇÕES DE ANÁLISE (Twelve Data)
-# ==============================================
+# ---------- Funções de análise (Twelve Data) ----------
 def obter_velas(par, intervalo="1min", n=30):
-    """Obtém as últimas n velas (fechos em ordem cronológica)."""
     try:
         url = f"https://api.twelvedata.com/time_series?symbol={par}&interval={intervalo}&outputsize={n}&apikey={API_KEY}"
         resp = requests.get(url, timeout=10)
@@ -98,7 +89,6 @@ def obter_velas(par, intervalo="1min", n=30):
     return None
 
 def calcular_ema(precos, periodo):
-    """EMA correta: SMA inicial + iteração completa."""
     if len(precos) < periodo:
         return None
     mult = 2 / (periodo + 1)
@@ -152,7 +142,6 @@ def analisar_ativo(par):
 
     diff_percent = abs(ema5 - ema13) / ema13 * 100
 
-    # Tendência básica (com threshold de 0.03% para pontuar)
     if ema5 > ema13:
         tendencia = "CALL"
         score = 1 if diff_percent > 0.03 else 0
@@ -265,21 +254,27 @@ def register():
         return redirect(url_for('index'))
 
     if request.method == 'POST':
-        username = request.form['username']
+        username = request.form['username'].strip()
         password = request.form['password']
-        if len(password) < 4:
-            flash('A palavra-passe deve ter pelo menos 4 caracteres', 'error')
+
+        # Validações reforçadas
+        if not re.match(r'^[A-Za-z0-9]{3,20}$', username):
+            flash('Nome de utilizador inválido (apenas letras e números, 3 a 20 caracteres).', 'error')
+            return render_template('register.html')
+        if len(password) < 8:
+            flash('A palavra-passe deve ter pelo menos 8 caracteres.', 'error')
+            return render_template('register.html')
+
+        user = models.create_user(username, password)
+        if user:
+            login_user(user)
+            resp = make_response(redirect(url_for('index')))
+            resp.set_cookie('afiliado_confirmado', '', expires=0)
+            flash('Conta criada com sucesso!', 'success')
+            return resp
         else:
-            user = models.create_user(username, password)
-            if user:
-                login_user(user)
-                resp = make_response(redirect(url_for('index')))
-                # Limpar cookie de afiliado após registo
-                resp.set_cookie('afiliado_confirmado', '', expires=0)
-                flash('Conta criada com sucesso!', 'success')
-                return resp
-            else:
-                flash('Nome de utilizador já existe', 'error')
+            flash('Nome de utilizador já existe', 'error')
+
     return render_template('register.html')
 
 @app.route('/')
@@ -297,7 +292,6 @@ def api_sinal():
 @app.route('/api/status')
 @login_required
 def api_status():
-    # Simulado para compatibilidade com o frontend
     return jsonify({par: 30 for par in ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
@@ -367,12 +361,9 @@ def admin():
 def admin_toggle(user_id):
     if not current_user.is_admin:
         return "Acesso negado", 403
-
-    # Impedir auto-desactivação
     if user_id == current_user.id:
         flash('Não pode alterar o estado da sua própria conta.', 'error')
         return redirect(url_for('admin'))
-
     user = models.get_user_by_id(user_id)
     if user:
         new_state = not user.is_active
@@ -383,6 +374,5 @@ def admin_toggle(user_id):
         flash('Utilizador não encontrado.', 'error')
     return redirect(url_for('admin'))
 
-# ---------- Execução ----------
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
