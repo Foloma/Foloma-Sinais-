@@ -21,22 +21,24 @@
             padding: 40px;
             border-radius: 32px;
             width: 100%;
-            max-width: 400px;
+            max-width: 420px;
             box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
             border: 1px solid rgba(255,255,255,0.1);
         }
         h1 { color: #fbbf24; text-align: center; margin-bottom: 30px; }
+        .input-group { margin-bottom: 15px; }
         input {
             width: 100%;
             padding: 12px;
-            margin: 10px 0;
             background: #1e293b;
             border: 1px solid #334155;
             border-radius: 20px;
             color: white;
             font-size: 16px;
+            box-sizing: border-box;
         }
-        button {
+        input:focus { border-color: #f59e0b; outline: none; }
+        .btn-primary {
             width: 100%;
             background: linear-gradient(135deg, #f59e0b, #d97706);
             border: none;
@@ -46,38 +48,141 @@
             font-weight: bold;
             font-size: 16px;
             cursor: pointer;
-            margin-top: 20px;
+            margin-top: 10px;
+            transition: opacity 0.2s;
         }
-        .link { text-align: center; margin-top: 20px; font-size: 14px; }
-        .link a { color: #fbbf24; text-decoration: none; }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+        .links { text-align: center; margin-top: 20px; font-size: 14px; display: flex; flex-direction: column; gap: 8px; }
+        .links a { color: #fbbf24; text-decoration: none; }
+
+        /* Mensagens flash por categoria */
         .flash {
-            background: rgba(239,68,68,0.2);
-            border-left: 4px solid #ef4444;
             padding: 10px;
             margin-bottom: 20px;
             border-radius: 8px;
+            font-size: 14px;
             color: #f1f5f9;
         }
+        .flash-error { background: rgba(239,68,68,0.2); border-left: 4px solid #ef4444; }
+        .flash-success { background: rgba(34,197,94,0.2); border-left: 4px solid #22c55e; }
+        .flash-info { background: rgba(59,130,246,0.2); border-left: 4px solid #3b82f6; }
+
+        .error-msg { color: #ef4444; font-size: 12px; margin-top: 4px; display: none; }
+        .error-msg.visible { display: block; }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>📝 Criar Conta Foloma</h1>
-        {% with messages = get_flashed_messages() %}
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                <div class="flash">
-                    {% for message in messages %}{{ message }}<br>{% endfor %}
-                </div>
+                {% for category, message in messages %}
+                    <div class="flash flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
             {% endif %}
         {% endwith %}
-        <form method="post">
-            <input type="text" name="username" placeholder="Utilizador" required>
-            <input type="password" name="password" placeholder="Palavra-passe (mínimo 4 caracteres)" required>
-            <button type="submit">Registar</button>
+
+        <form id="registerForm" method="post" novalidate>
+            <div class="input-group">
+                <input type="text" name="username" id="username" placeholder="Utilizador (apenas letras e números)"
+                       required pattern="[A-Za-z0-9]{3,20}" autocomplete="off"
+                       value="{{ request.form.get('username', '') }}">
+                <div class="error-msg" id="usernameError">Utilizador deve ter 3 a 20 caracteres alfanuméricos.</div>
+            </div>
+
+            <div class="input-group">
+                <input type="password" name="password" id="password" placeholder="Palavra-passe (mínimo 8 caracteres)"
+                       required minlength="8" autocomplete="new-password">
+                <div class="error-msg" id="passwordError">Mínimo 8 caracteres.</div>
+            </div>
+
+            <div class="input-group">
+                <input type="password" name="confirm_password" id="confirm_password"
+                       placeholder="Confirmar palavra-passe" required autocomplete="new-password">
+                <div class="error-msg" id="confirmError">As palavras-passe não coincidem.</div>
+            </div>
+
+            <button type="submit" class="btn-primary" id="submitBtn">Registar</button>
         </form>
-        <div class="link">
-            Já tem conta? <a href="{{ url_for('login') }}">Faça login</a>
+
+        <div class="links">
+            <a href="{{ url_for('login') }}">Já tem conta? Faça login</a>
+            <a href="{{ url_for('afiliado') }}">↩ Voltar ao passo anterior</a>
         </div>
     </div>
+
+    <script>
+        const form = document.getElementById('registerForm');
+        const btn = document.getElementById('submitBtn');
+        const username = document.getElementById('username');
+        const password = document.getElementById('password');
+        const confirmPassword = document.getElementById('confirm_password');
+        const usernameError = document.getElementById('usernameError');
+        const passwordError = document.getElementById('passwordError');
+        const confirmError = document.getElementById('confirmError');
+
+        function validateForm() {
+            let valid = true;
+
+            // Username
+            const usernamePattern = /^[A-Za-z0-9]{3,20}$/;
+            if (!usernamePattern.test(username.value.trim())) {
+                usernameError.classList.add('visible');
+                valid = false;
+            } else {
+                usernameError.classList.remove('visible');
+            }
+
+            // Password length
+            if (password.value.length < 8) {
+                passwordError.classList.add('visible');
+                valid = false;
+            } else {
+                passwordError.classList.remove('visible');
+            }
+
+            // Confirm password
+            if (password.value !== confirmPassword.value) {
+                confirmError.classList.add('visible');
+                valid = false;
+            } else {
+                confirmError.classList.remove('visible');
+            }
+
+            return valid;
+        }
+
+        // Validação em tempo real
+        username.addEventListener('input', () => {
+            if (/^[A-Za-z0-9]{3,20}$/.test(username.value.trim())) usernameError.classList.remove('visible');
+        });
+        password.addEventListener('input', () => {
+            if (password.value.length >= 8) passwordError.classList.remove('visible');
+            if (password.value === confirmPassword.value) confirmError.classList.remove('visible');
+        });
+        confirmPassword.addEventListener('input', () => {
+            if (password.value === confirmPassword.value) confirmError.classList.remove('visible');
+        });
+
+        form.addEventListener('submit', function(e) {
+            if (!validateForm()) {
+                e.preventDefault();
+                return;
+            }
+
+            // Desabilitar o botão para evitar duplo envio
+            btn.disabled = true;
+            btn.textContent = '⏳ A criar conta...';
+
+            // Fallback: se o formulário não for enviado em 5 segundos (erro de rede), reativar o botão
+            setTimeout(function() {
+                if (btn.disabled) {
+                    btn.disabled = false;
+                    btn.textContent = 'Registar';
+                }
+            }, 5000);
+        });
+    </script>
 </body>
 </html>
