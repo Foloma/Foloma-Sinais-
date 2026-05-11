@@ -241,7 +241,6 @@ def login():
         return redirect(url_for('index'))
 
     return render_template('login.html')
-
 @app.route('/afiliado')
 def afiliado():
     if current_user.is_authenticated:
