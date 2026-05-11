@@ -219,22 +219,27 @@ def obter_melhor_sinal():
 # ROTAS
 # ==============================================
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("5 per minute")   # Proteção contra brute force
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
+
     if request.method == 'POST':
-        username = request.form['username']
+        username = request.form['username'].strip()
         password = request.form['password']
+
         user = models.get_user_by_username(username)
-        if user and user.check_password(password):
-            if not user.is_active:
-                flash('Conta desactivada. Contacte o administrador.', 'error')
-            else:
-                login_user(user)
-                flash('Login efectuado com sucesso!', 'success')
-                return redirect(url_for('index'))
-        else:
-            flash('Credenciais inválidas', 'error')
+
+        # Mensagem genérica para evitar enumeração de usernames
+        if not user or not user.check_password(password) or not user.is_active:
+            flash('Credenciais inválidas ou conta desactivada.', 'error')
+            return render_template('login.html')
+
+        # Se chegou aqui, as credenciais estão corretas e a conta está ativa
+        login_user(user)
+        flash('Login efectuado com sucesso!', 'success')
+        return redirect(url_for('index'))
+
     return render_template('login.html')
 
 @app.route('/afiliado')
