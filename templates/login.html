@@ -47,37 +47,63 @@
             font-size: 16px;
             cursor: pointer;
             margin-top: 20px;
+            transition: opacity 0.2s;
         }
-        .link { text-align: center; margin-top: 20px; font-size: 14px; }
-        .link a { color: #fbbf24; text-decoration: none; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .links { text-align: center; margin-top: 20px; font-size: 14px; display: flex; flex-direction: column; gap: 8px; }
+        .links a { color: #fbbf24; text-decoration: none; }
+
+        /* Flash messages */
         .flash {
-            background: rgba(239,68,68,0.2);
-            border-left: 4px solid #ef4444;
             padding: 10px;
             margin-bottom: 20px;
             border-radius: 8px;
             color: #f1f5f9;
+            font-size: 14px;
         }
+        .flash-error { background: rgba(239,68,68,0.2); border-left: 4px solid #ef4444; }
+        .flash-success { background: rgba(34,197,94,0.2); border-left: 4px solid #22c55e; }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>🔐 Foloma Visão 360</h1>
-        {% with messages = get_flashed_messages() %}
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                <div class="flash">
-                    {% for message in messages %}{{ message }}<br>{% endfor %}
-                </div>
+                {% for category, message in messages %}
+                    <div class="flash flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
             {% endif %}
         {% endwith %}
-        <form method="post">
-            <input type="text" name="username" placeholder="Utilizador" required>
+
+        <form method="post" onsubmit="return handleSubmit();">
+            <input type="text" name="username" placeholder="Utilizador" required
+                   value="{{ request.form.get('username', '') }}" autocomplete="off">
             <input type="password" name="password" placeholder="Palavra-passe" required>
-            <button type="submit">Entrar</button>
+            <button type="submit" id="loginBtn">Entrar</button>
         </form>
-        <div class="link">
-            Ainda não tem conta? <a href="{{ url_for('afiliado') }}">Registe-se</a>
+
+        <div class="links">
+            <a href="{{ url_for('afiliado') }}">Ainda não tem conta? Registe-se</a>
         </div>
     </div>
+
+    <script>
+        function handleSubmit() {
+            const btn = document.getElementById('loginBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ A entrar...';
+
+            // Fallback: reativar após 5 segundos se ainda estiver na página (erro de rede)
+            setTimeout(function() {
+                if (btn.disabled) {
+                    btn.disabled = false;
+                    btn.textContent = 'Entrar';
+                }
+            }, 5000);
+            return true;
+        }
+    </script>
 </body>
 </html>
