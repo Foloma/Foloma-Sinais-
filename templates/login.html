@@ -3,107 +3,286 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Foloma Visão 360 – Login</title>
+    <title>Login | Foloma Visão 360</title>
+    <!-- Font Awesome para ícones -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        /* ===== RESET & BASE ===== */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            background: #0b1120;
+            color: #e2e8f0;
+            min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 20px;
+            padding: 24px;
         }
-        .card {
-            background: rgba(15, 23, 42, 0.9);
-            backdrop-filter: blur(10px);
-            padding: 40px;
-            border-radius: 32px;
+        .container {
+            max-width: 420px;
             width: 100%;
-            max-width: 400px;
-            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            border-radius: 40px;
+            padding: 40px 32px;
+            border: 1px solid rgba(255,255,255,0.06);
+            box-shadow: 0 8px 48px rgba(0,0,0,0.6);
         }
-        h1 { color: #fbbf24; text-align: center; margin-bottom: 30px; }
-        input {
-            width: 100%;
-            padding: 12px;
-            margin: 10px 0;
+        /* ===== LOGO / HEADER ===== */
+        .logo {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+        .logo h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fbbf24, #f59e0b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .logo h1 i { -webkit-text-fill-color: #fbbf24; }
+        .logo p {
+            color: #94a3b8;
+            font-size: 0.95rem;
+            margin-top: 4px;
+        }
+
+        /* ===== FLASH MESSAGES ===== */
+        .flash {
+            padding: 12px 16px;
+            border-radius: 16px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.3s ease;
+        }
+        .flash.error {
+            background: rgba(239,68,68,0.12);
+            color: #ef4444;
+            border-left: 4px solid #ef4444;
+        }
+        .flash.success {
+            background: rgba(34,197,94,0.12);
+            color: #22c55e;
+            border-left: 4px solid #22c55e;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ===== FORMULÁRIO ===== */
+        .form-group {
+            margin-bottom: 16px;
+            position: relative;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #94a3b8;
+            margin-bottom: 4px;
+        }
+        .form-group .input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
             background: #1e293b;
+            border-radius: 40px;
             border: 1px solid #334155;
-            border-radius: 20px;
-            color: white;
-            font-size: 16px;
+            transition: border-color 0.2s, box-shadow 0.2s;
         }
-        button {
+        .form-group .input-wrapper:focus-within {
+            border-color: #fbbf24;
+            box-shadow: 0 0 0 3px rgba(251,191,36,0.15);
+        }
+        .form-group .input-wrapper i {
+            position: absolute;
+            left: 14px;
+            color: #64748b;
+            font-size: 1rem;
+            pointer-events: none;
+        }
+        .form-group .input-wrapper input {
             width: 100%;
+            padding: 14px 14px 14px 44px;
+            background: transparent;
+            border: none;
+            color: #f1f5f9;
+            font-size: 1rem;
+            outline: none;
+        }
+        .form-group .input-wrapper input::placeholder {
+            color: #64748b;
+            font-weight: 300;
+        }
+
+        /* ===== BOTÃO ===== */
+        .btn-login {
             background: linear-gradient(135deg, #f59e0b, #d97706);
             border: none;
-            padding: 12px;
-            border-radius: 30px;
-            color: white;
-            font-weight: bold;
-            font-size: 16px;
+            color: #0b1120;
+            font-weight: 700;
+            font-size: 1rem;
+            padding: 14px;
+            border-radius: 60px;
             cursor: pointer;
-            margin-top: 20px;
-            transition: opacity 0.2s;
+            width: 100%;
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 16px rgba(245, 158, 11, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 8px;
         }
-        button:disabled { opacity: 0.6; cursor: not-allowed; }
-        .links { text-align: center; margin-top: 20px; font-size: 14px; display: flex; flex-direction: column; gap: 8px; }
-        .links a { color: #fbbf24; text-decoration: none; }
+        .btn-login:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 28px rgba(245, 158, 11, 0.3);
+        }
+        .btn-login:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .btn-login .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(11,17,32,0.2);
+            border-top: 2px solid #0b1120;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Flash messages */
-        .flash {
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 8px;
-            color: #f1f5f9;
-            font-size: 14px;
+        /* ===== LINKS ===== */
+        .links {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 0.9rem;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
         }
-        .flash-error { background: rgba(239,68,68,0.2); border-left: 4px solid #ef4444; }
-        .flash-success { background: rgba(34,197,94,0.2); border-left: 4px solid #22c55e; }
+        .links a {
+            color: #94a3b8;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .links a:hover { color: #fbbf24; }
+        .links .register-link {
+            font-weight: 600;
+            color: #fbbf24;
+        }
+        .links .register-link:hover { text-decoration: underline; }
+
+        /* ===== RESPONSIVO ===== */
+        @media (max-width: 480px) {
+            .container { padding: 24px 16px; }
+            .logo h1 { font-size: 1.4rem; }
+            .form-group .input-wrapper input { padding: 12px 12px 12px 40px; font-size: 0.95rem; }
+        }
     </style>
 </head>
 <body>
-    <div class="card">
-        <h1>🔐 Foloma Visão 360</h1>
+    <div class="container">
 
+        <!-- LOGO -->
+        <div class="logo">
+            <h1><i class="fas fa-satellite-dish"></i> Foloma Visão 360</h1>
+            <p><i class="fas fa-shield-alt" style="color: #fbbf24;"></i> Plataforma de Sinais Inteligentes</p>
+        </div>
+
+        <!-- FLASH MESSAGES -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="flash flash-{{ category }}">{{ message }}</div>
+                    <div class="flash {{ category }}">
+                        <i class="fas fa-{% if category == 'success' %}check-circle{% else %}exclamation-circle{% endif %}"></i>
+                        {{ message }}
+                    </div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
 
+        <!-- FORMULÁRIO -->
         <form method="post" onsubmit="return handleSubmit();">
-            <input type="text" name="username" placeholder="Utilizador" required
-                   value="{{ request.form.get('username', '') }}" autocomplete="off">
-            <input type="password" name="password" placeholder="Palavra-passe" required>
-            <button type="submit" id="loginBtn">Entrar</button>
+            <div class="form-group">
+                <label for="username"><i class="fas fa-user" style="margin-right:6px;"></i> Utilizador</label>
+                <div class="input-wrapper">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="username" name="username" placeholder="Seu nome de utilizador" required
+                           value="{{ request.form.get('username', '') }}" autocomplete="username">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="password"><i class="fas fa-lock" style="margin-right:6px;"></i> Palavra-passe</label>
+                <div class="input-wrapper">
+                    <i class="fas fa-key"></i>
+                    <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+                </div>
+            </div>
+
+            <button type="submit" class="btn-login" id="loginBtn">
+                <i class="fas fa-sign-in-alt"></i> Entrar
+            </button>
         </form>
 
+        <!-- LINKS -->
         <div class="links">
-            <a href="{{ url_for('afiliado') }}">Ainda não tem conta? Registe-se</a>
+            <span>Ainda não tem conta?</span>
+            <a href="{{ url_for('afiliado') }}" class="register-link">
+                <i class="fas fa-user-plus"></i> Criar conta gratuita
+            </a>
+        </div>
+
+        <!-- FOOTER (opcional) -->
+        <div style="text-align:center; margin-top:28px; font-size:0.7rem; color:#475569; border-top:1px solid rgba(255,255,255,0.04); padding-top:16px;">
+            <i class="fas fa-lock" style="margin-right:4px;"></i> Ambiente seguro
         </div>
     </div>
 
     <script>
         function handleSubmit() {
             const btn = document.getElementById('loginBtn');
-            btn.disabled = true;
-            btn.textContent = '⏳ A entrar...';
+            if (btn.disabled) return false;
 
-            // Fallback: reativar após 5 segundos se ainda estiver na página (erro de rede)
+            // Desabilitar e mostrar spinner
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> A entrar...';
+
+            // Fallback: reativar após 5 segundos em caso de erro de rede
             setTimeout(function() {
                 if (btn.disabled) {
                     btn.disabled = false;
-                    btn.textContent = 'Entrar';
+                    btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Entrar';
                 }
             }, 5000);
-            return true;
+
+            return true; // Permite o envio do formulário
         }
+
+        // Limpa mensagens flash após 5 segundos (opcional)
+        document.addEventListener('DOMContentLoaded', function() {
+            const flashes = document.querySelectorAll('.flash');
+            flashes.forEach(function(flash) {
+                setTimeout(function() {
+                    flash.style.opacity = '0';
+                    setTimeout(function() {
+                        flash.style.display = 'none';
+                    }, 300);
+                }, 5000);
+            });
+        });
     </script>
 </body>
 </html>
