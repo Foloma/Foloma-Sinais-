@@ -33,7 +33,16 @@ limiter = Limiter(
 )
 
 # ---------- Configurações (Twelve Data) ----------
-API_KEY = os.environ.get('TWELVE_DATA_KEY', '')
+# CORREÇÃO: Nome da variável alterado para TWELVE_DATA_API_KEY
+API_KEY = os.environ.get('TWELVE_DATA_API_KEY', '')
+
+# Validação: se estiver vazia, log de erro
+if not API_KEY:
+    logging.error("⚠️ CHAVE DA API NÃO CONFIGURADA! Defina TWELVE_DATA_API_KEY no ambiente.")
+else:
+    # Log parcial para confirmar que foi carregada (nunca logue a chave completa)
+    logging.info(f"Chave API carregada: {API_KEY[:4]}...{API_KEY[-4:]}")
+
 ATIVOS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "NZD/USD"]
 SCORE_MINIMO = float(os.environ.get('SCORE_MINIMO', '1.5'))
 score_lock = threading.Lock()
@@ -70,6 +79,11 @@ def load_user(user_id):
 
 # ---------- Funções de análise (Twelve Data) ----------
 def obter_velas(par, intervalo="1min", n=30):
+    # Verificação explícita da chave
+    if not API_KEY:
+        logging.error("API_KEY não definida. Não é possível fazer requisição.")
+        return None
+
     try:
         url = f"https://api.twelvedata.com/time_series?symbol={par}&interval={intervalo}&outputsize={n}&apikey={API_KEY}"
         resp = requests.get(url, timeout=10)
@@ -219,7 +233,7 @@ def obter_melhor_sinal():
 # ROTAS
 # ==============================================
 @app.route('/login', methods=['GET', 'POST'])
-@limiter.limit("5 per minute")   # Proteção contra brute force
+@limiter.limit("5 per minute")
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
@@ -230,17 +244,16 @@ def login():
 
         user = models.get_user_by_username(username)
 
-        # Mensagem genérica para evitar enumeração de usernames
         if not user or not user.check_password(password) or not user.is_active:
             flash('Credenciais inválidas ou conta desactivada.', 'error')
             return render_template('login.html')
 
-        # Se chegou aqui, as credenciais estão corretas e a conta está ativa
         login_user(user)
         flash('Login efectuado com sucesso!', 'success')
         return redirect(url_for('index'))
 
     return render_template('login.html')
+
 @app.route('/afiliado')
 def afiliado():
     if current_user.is_authenticated:
@@ -249,7 +262,6 @@ def afiliado():
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    # Protecção do funil de afiliação
     if not request.cookies.get('afiliado_confirmado'):
         flash('Precisa de se registar na Pocket Option através do nosso link de afiliado primeiro.', 'error')
         return redirect(url_for('afiliado'))
@@ -261,7 +273,6 @@ def register():
         username = request.form['username'].strip()
         password = request.form['password']
 
-        # Validações reforçadas
         if not re.match(r'^[A-Za-z0-9]{3,20}$', username):
             flash('Nome de utilizador inválido (apenas letras e números, 3 a 20 caracteres).', 'error')
             return render_template('register.html')
