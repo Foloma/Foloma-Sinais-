@@ -30,18 +30,21 @@ def get_db_conn():
     """Retorna uma conexão SQLite com row_factory e foreign_keys ativadas."""
     conn = sqlite3.connect(_db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")  # respeitar FKs
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
-# ---------- Inicialização ----------
+# ---------- Inicialização (com migração para novas colunas) ----------
 def init_db():
     with get_db_conn() as conn:
+        # Tabela users
         conn.execute('''CREATE TABLE IF NOT EXISTS users
                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
                          username TEXT UNIQUE NOT NULL,
                          password_hash TEXT NOT NULL,
                          is_active INTEGER DEFAULT 1,
                          is_admin INTEGER DEFAULT 0)''')
+        
+        # Tabela trades com as novas colunas estrategia e confianca
         conn.execute('''CREATE TABLE IF NOT EXISTS trades
                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
                          user_id INTEGER NOT NULL,
@@ -50,10 +53,23 @@ def init_db():
                          score REAL NOT NULL,
                          expiracao INTEGER NOT NULL,
                          resultado TEXT,
+                         estrategia TEXT,
+                         confianca REAL,
                          timestamp TEXT NOT NULL,
                          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)''')
-        # Índice para acelerar queries por user_id
+        
+        # Índice
         conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id)')
+        
+        # --- MIGRAÇÃO: adicionar colunas se não existirem (para bancos antigos) ---
+        # Verifica se a coluna 'estrategia' já existe
+        cursor = conn.execute("PRAGMA table_info(trades)")
+        colunas = [col[1] for col in cursor.fetchall()]
+        if 'estrategia' not in colunas:
+            conn.execute('ALTER TABLE trades ADD COLUMN estrategia TEXT')
+        if 'confianca' not in colunas:
+            conn.execute('ALTER TABLE trades ADD COLUMN confianca REAL')
+        
         conn.commit()
 
 # ---------- User functions ----------
@@ -101,13 +117,16 @@ def list_users():
         cursor = conn.execute('SELECT id, username, is_active, is_admin FROM users')
         return cursor.fetchall()
 
-# ---------- Trade functions ----------
-def add_trade(user_id, ativo, direcao, score, expiracao, resultado=None):
+# ---------- Trade functions (ATUALIZADAS) ----------
+def add_trade(user_id, ativo, direcao, score, expiracao, resultado=None, estrategia=None, confianca=0):
+    """Insere um novo trade com campos adicionais (estrategia e confianca)."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db_conn() as conn:
         cursor = conn.execute(
-            'INSERT INTO trades (user_id, ativo, direcao, score, expiracao, resultado, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (user_id, ativo, direcao, score, expiracao, resultado, timestamp)
+            '''INSERT INTO trades 
+               (user_id, ativo, direcao, score, expiracao, resultado, estrategia, confianca, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (user_id, ativo, direcao, score, expiracao, resultado, estrategia, confianca, timestamp)
         )
         conn.commit()
         return cursor.lastrowid
@@ -120,7 +139,11 @@ def update_trade_result(trade_id, resultado):
 def get_user_trades(user_id, limit=50):
     with get_db_conn() as conn:
         cursor = conn.execute(
-            'SELECT id, ativo, direcao, score, expiracao, resultado, timestamp FROM trades WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?',
+            '''SELECT id, ativo, direcao, score, expiracao, resultado, estrategia, confianca, timestamp 
+               FROM trades 
+               WHERE user_id = ? 
+               ORDER BY timestamp DESC 
+               LIMIT ?''',
             (user_id, limit)
         )
         return cursor.fetchall()
@@ -128,7 +151,73 @@ def get_user_trades(user_id, limit=50):
 def get_last_unresolved_trade(user_id):
     with get_db_conn() as conn:
         cursor = conn.execute(
-            'SELECT id, ativo, direcao, score, expiracao, timestamp FROM trades WHERE user_id = ? AND resultado IS NULL ORDER BY timestamp DESC LIMIT 1',
+            '''SELECT id, ativo, direcao, score, expiracao, estrategia, confianca, timestamp 
+               FROM trades 
+               WHERE user_id = ? AND resultado IS NULL 
+               ORDER BY timestamp DESC 
+               LIMIT 1''',
             (user_id,)
         )
         return cursor.fetchone()
+
+# ---------- NOVAS FUNÇÕES PARA ESTATÍSTICAS ----------
+def get_performance_stats(user_id):
+    """Retorna estatísticas de desempenho agregadas por estratégia, ativo, hora e dia da semana."""
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    
+    # Por estratégia
+    cursor.execute('''
+        SELECT estrategia, 
+               COUNT(*) as total, 
+               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
+               AVG(score) as avg_score,
+               AVG(confianca) as avg_confianca
+        FROM trades
+        WHERE user_id = ? AND resultado IS NOT NULL
+        GROUP BY estrategia
+    ''', (user_id,))
+    estrategias = cursor.fetchall()
+
+    # Por ativo
+    cursor.execute('''
+        SELECT ativo,
+               COUNT(*) as total,
+               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
+        FROM trades
+        WHERE user_id = ? AND resultado IS NOT NULL
+        GROUP BY ativo
+    ''', (user_id,))
+    ativos = cursor.fetchall()
+
+    # Por hora do dia
+    cursor.execute('''
+        SELECT strftime('%H', timestamp) as hora,
+               COUNT(*) as total,
+               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
+        FROM trades
+        WHERE user_id = ? AND resultado IS NOT NULL
+        GROUP BY hora
+        ORDER BY hora
+    ''', (user_id,))
+    horas = cursor.fetchall()
+
+    # Por dia da semana (0=Domingo, 6=Sábado)
+    cursor.execute('''
+        SELECT strftime('%w', timestamp) as dia_semana,
+               COUNT(*) as total,
+               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
+        FROM trades
+        WHERE user_id = ? AND resultado IS NOT NULL
+        GROUP BY dia_semana
+        ORDER BY dia_semana
+    ''', (user_id,))
+    dias = cursor.fetchall()
+
+    conn.close()
+    return {
+        "por_estrategia": estrategias,
+        "por_ativo": ativos,
+        "por_hora": horas,
+        "por_dia_semana": dias
+    }
