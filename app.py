@@ -1,7 +1,5 @@
 import os
 import re
-import time
-import threading
 import secrets
 import logging
 from datetime import datetime
@@ -10,9 +8,9 @@ from flask import Flask, render_template, redirect, url_for, request, flash, jso
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import requests
 
 import models
+from engine import StrategyEngine
 
 # ---------- Configuração de logging ----------
 logging.basicConfig(level=logging.INFO,
@@ -32,26 +30,17 @@ limiter = Limiter(
     default_limits=["100 per hour"]
 )
 
-# ---------- Configurações (Twelve Data) ----------
-# CORREÇÃO: Nome da variável alterado para TWELVE_DATA_API_KEY
-API_KEY = os.environ.get('TWELVE_DATA_API_KEY', '')
-
-# Validação: se estiver vazia, log de erro
-if not API_KEY:
-    logging.error("⚠️ CHAVE DA API NÃO CONFIGURADA! Defina TWELVE_DATA_API_KEY no ambiente.")
-else:
-    # Log parcial para confirmar que foi carregada (nunca logue a chave completa)
-    logging.info(f"Chave API carregada: {API_KEY[:4]}...{API_KEY[-4:]}")
-
-ATIVOS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "NZD/USD"]
+# ---------- Configurações ----------
 SCORE_MINIMO = float(os.environ.get('SCORE_MINIMO', '1.5'))
-score_lock = threading.Lock()
 app.config['SCORE_MINIMO'] = SCORE_MINIMO
 
 AFFILIATE_LINK = os.environ.get('AFFILIATE_LINK', 'https://pocket-friends.co/r/br4kbim2pe')
 app.config['AFFILIATE_LINK'] = AFFILIATE_LINK
 
-# ---------- Inicialização da base de dados ----------
+# Inicializa o motor de estratégias (carrega todas as estratégias da pasta)
+engine = StrategyEngine()
+
+# ---------- Banco de dados ----------
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'users.db')
 models.set_db_path(db_path)
 models.init_db()
@@ -76,158 +65,6 @@ def load_user(user_id):
         return models.get_user_by_id(int(user_id))
     except (ValueError, TypeError):
         return None
-
-# ---------- Funções de análise (Twelve Data) ----------
-def obter_velas(par, intervalo="1min", n=30):
-    # Verificação explícita da chave
-    if not API_KEY:
-        logging.error("API_KEY não definida. Não é possível fazer requisição.")
-        return None
-
-    try:
-        url = f"https://api.twelvedata.com/time_series?symbol={par}&interval={intervalo}&outputsize={n}&apikey={API_KEY}"
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        dados = resp.json()
-        if "values" in dados:
-            precos = [float(v["close"]) for v in reversed(dados["values"])]
-            if len(precos) == n:
-                return precos
-            else:
-                logging.warning(f"Dados insuficientes para {par}: obtidos {len(precos)} de {n}")
-                return None
-        else:
-            logging.error(f"Resposta inesperada da Twelve Data para {par}: {dados}")
-    except Exception as e:
-        logging.error(f"Erro ao obter velas para {par}: {e}", exc_info=True)
-    return None
-
-def calcular_ema(precos, periodo):
-    if len(precos) < periodo:
-        return None
-    mult = 2 / (periodo + 1)
-    sma = sum(precos[:periodo]) / periodo
-    ema = sma
-    for p in precos[periodo:]:
-        ema = (p - ema) * mult + ema
-    return ema
-
-def calcular_rsi(precos, periodo=7):
-    if len(precos) < periodo + 1:
-        return 50
-    deltas = [precos[i] - precos[i-1] for i in range(1, len(precos))]
-    ult_deltas = deltas[-periodo:]
-    ganhos = sum(d for d in ult_deltas if d > 0)
-    perdas = sum(-d for d in ult_deltas if d < 0)
-    avg_gain = ganhos / periodo
-    avg_loss = perdas / periodo
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def calcular_macd(precos):
-    ema12 = calcular_ema(precos, 12)
-    ema26 = calcular_ema(precos, 26)
-    if None in (ema12, ema26):
-        return None
-    return ema12 - ema26
-
-def calcular_bollinger(precos, periodo=20, desvios=2):
-    if len(precos) < periodo:
-        return None, None, None
-    ultimos = precos[-periodo:]
-    media = sum(ultimos) / periodo
-    var = sum((x - media) ** 2 for x in ultimos) / periodo
-    std = var ** 0.5
-    superior = media + desvios * std
-    inferior = media - desvios * std
-    return superior, media, inferior
-
-def analisar_ativo(par):
-    precos = obter_velas(par, intervalo="1min", n=30)
-    if precos is None or len(precos) < 30:
-        return None, 0, f"Erro ao obter preços para {par}"
-
-    ema5 = calcular_ema(precos, 5)
-    ema13 = calcular_ema(precos, 13)
-    if None in (ema5, ema13):
-        return None, 0, "Erro no cálculo das EMAs"
-
-    diff_percent = abs(ema5 - ema13) / ema13 * 100
-
-    if ema5 > ema13:
-        tendencia = "CALL"
-        score = 1 if diff_percent > 0.03 else 0
-    else:
-        tendencia = "PUT"
-        score = 1 if diff_percent > 0.03 else 0
-
-    rsi = calcular_rsi(precos, 7)
-    macd = calcular_macd(precos)
-    superior, media, inferior = calcular_bollinger(precos)
-    preco_atual = precos[-1]
-
-    if tendencia == "CALL" and rsi < 55:
-        score += 1
-    elif tendencia == "PUT" and rsi > 45:
-        score += 1
-    elif tendencia == "CALL" and rsi < 65:
-        score += 0.5
-    elif tendencia == "PUT" and rsi > 35:
-        score += 0.5
-
-    if macd is not None:
-        if tendencia == "CALL" and macd > 0:
-            score += 0.5
-        elif tendencia == "PUT" and macd < 0:
-            score += 0.5
-
-    if superior is not None:
-        if tendencia == "CALL" and preco_atual <= inferior * 1.001:
-            score += 0.5
-        elif tendencia == "PUT" and preco_atual >= superior * 0.999:
-            score += 0.5
-
-    if diff_percent > 0.15:
-        score += 0.5
-    elif diff_percent > 0.08:
-        score += 0.25
-
-    macd_str = f"{macd:.5f}" if macd is not None else "N/A"
-    just = (f"EMA5:{ema5:.5f} EMA13:{ema13:.5f} | RSI:{rsi:.1f} | "
-            f"MACD:{macd_str} | Dif:{diff_percent:.2f}% | Score:{score:.1f}")
-
-    if score >= app.config['SCORE_MINIMO']:
-        return tendencia, score, just
-    return None, score, just
-
-def obter_melhor_sinal():
-    melhores = []
-    for par in ATIVOS:
-        sinal, score, just = analisar_ativo(par)
-        if sinal is not None:
-            melhores.append((par, sinal, score, just))
-    if not melhores:
-        return {
-            "ativo": None,
-            "direcao": None,
-            "score": 0,
-            "analise": "Nenhum sinal forte no momento",
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "tempo_exp": None
-        }
-    melhores.sort(key=lambda x: x[2], reverse=True)
-    ativo, sinal, score, just = melhores[0]
-    tempo_exp = 1 if score >= 3.5 else 2 if score >= 2.5 else 3
-    return {
-        "ativo": ativo,
-        "direcao": sinal,
-        "score": score,
-        "analise": just,
-        "timestamp": datetime.now().strftime("%H:%M:%S"),
-        "tempo_exp": tempo_exp
-    }
 
 # ==============================================
 # ROTAS
@@ -298,16 +135,20 @@ def index():
     trades = models.get_user_trades(current_user.id, limit=50)
     return render_template('index.html', trades=trades)
 
+# ---------- API com o novo motor ----------
 @app.route('/api/sinal')
 @login_required
 @limiter.limit("1 per minute")
 def api_sinal():
-    return jsonify(obter_melhor_sinal())
+    # Obtém o melhor sinal usando todas as estratégias
+    resultado = engine.get_best_signal()
+    return jsonify(resultado)
 
 @app.route('/api/status')
 @login_required
 def api_status():
-    return jsonify({par: 30 for par in ATIVOS})
+    # Retorna o status de cada ativo (quantas velas disponíveis, etc.)
+    return jsonify({symbol: 30 for symbol in engine.ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
 @login_required
@@ -316,8 +157,7 @@ def config():
     if 'score_minimo' in data:
         try:
             novo = float(data['score_minimo'])
-            with score_lock:
-                app.config['SCORE_MINIMO'] = novo
+            app.config['SCORE_MINIMO'] = novo
             return jsonify({"status": "ok", "score_minimo": novo})
         except (ValueError, TypeError):
             return jsonify({"status": "erro", "msg": "Valor inválido"}), 400
@@ -333,10 +173,15 @@ def registar_trade():
     direcao = data.get('direcao')
     score = data.get('score')
     expiracao = data.get('expiracao')
+    estrategia = data.get('estrategia', 'Desconhecida')
+    confianca = data.get('confianca', 0)
     if not all([ativo, direcao, score is not None, expiracao is not None]):
         return jsonify({"status": "erro", "msg": "Campos obrigatórios em falta"}), 400
     try:
-        trade_id = models.add_trade(current_user.id, ativo, direcao, float(score), int(expiracao))
+        trade_id = models.add_trade(
+            current_user.id, ativo, direcao, float(score), int(expiracao),
+            estrategia=estrategia, confianca=float(confianca)
+        )
         return jsonify({"status": "ok", "trade_id": trade_id})
     except Exception as e:
         logging.error(f"Erro ao registar trade: {e}", exc_info=True)
@@ -356,6 +201,13 @@ def resultado_trade():
         return jsonify({"status": "erro", "msg": "Nenhum trade pendente encontrado"}), 404
     models.update_trade_result(trade['id'], resultado)
     return jsonify({"status": "ok"})
+
+@app.route('/api/estatisticas')
+@login_required
+def estatisticas():
+    """Retorna estatísticas de desempenho por estratégia, ativo, horário."""
+    stats = models.get_performance_stats(current_user.id)
+    return jsonify(stats)
 
 @app.route('/logout')
 @login_required
