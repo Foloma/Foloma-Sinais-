@@ -135,19 +135,18 @@ def index():
     trades = models.get_user_trades(current_user.id, limit=50)
     return render_template('index.html', trades=trades)
 
-# ---------- API com o novo motor ----------
+# ---------- API ----------
 @app.route('/api/sinal')
 @login_required
 @limiter.limit("1 per minute")
 def api_sinal():
-    # Obtém o melhor sinal usando todas as estratégias
     resultado = engine.get_best_signal()
     return jsonify(resultado)
 
 @app.route('/api/status')
 @login_required
+@limiter.limit("300 per hour")  # Aumentado de 100 para 300
 def api_status():
-    # Retorna o status de cada ativo (quantas velas disponíveis, etc.)
     return jsonify({symbol: 30 for symbol in engine.ATIVOS})
 
 @app.route('/api/config', methods=['POST'])
@@ -204,10 +203,16 @@ def resultado_trade():
 
 @app.route('/api/estatisticas')
 @login_required
-def estatisticas():
-    """Retorna estatísticas de desempenho por estratégia, ativo, horário."""
+def api_estatisticas():
     stats = models.get_performance_stats(current_user.id)
     return jsonify(stats)
+
+# ---------- PÁGINAS ----------
+@app.route('/estatisticas')
+@login_required
+def estatisticas():
+    stats = models.get_performance_stats(current_user.id)
+    return render_template('estatisticas.html', stats=stats)
 
 @app.route('/logout')
 @login_required
