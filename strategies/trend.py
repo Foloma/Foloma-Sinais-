@@ -92,7 +92,8 @@ class TrendStrategy(Strategy):
                 score += 0.25
 
         confidence = min(100, max(0, score * 20))
-        if score >= 1.5:
+        # Limiar reduzido de 1.5 para 1.0
+        if score >= 1.0:
             return {
                 "symbol": symbol,
                 "signal": tendencia_5,
