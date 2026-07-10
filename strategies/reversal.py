@@ -82,12 +82,15 @@ class ReversalStrategy(Strategy):
             return None
 
         confidence = min(100, max(0, score * 25))
-        return {
-            "symbol": symbol,
-            "signal": signal,
-            "confidence": confidence,
-            "score": score,
-            "reason": reason,
-            "strategy": self.name,
-            "indicators": {"rsi": rsi_14, "bollinger_sup": sup, "bollinger_inf": inf}
-        }
+        # Limiar reduzido de 1.5 para 1.0 (já que score mínimo é 1.5)
+        if score >= 1.0:
+            return {
+                "symbol": symbol,
+                "signal": signal,
+                "confidence": confidence,
+                "score": score,
+                "reason": reason,
+                "strategy": self.name,
+                "indicators": {"rsi": rsi_14, "bollinger_sup": sup, "bollinger_inf": inf}
+            }
+        return None
