@@ -174,6 +174,18 @@
             color: #64748b;
             margin-top: 8px;
         }
+        .quality-badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 40px;
+            font-weight: 700;
+            font-size: 0.8rem;
+            margin-left: 8px;
+        }
+        .quality-Aplus { background: #22c55e; color: #0b1120; }
+        .quality-A { background: #4ade80; color: #0b1120; }
+        .quality-B { background: #fbbf24; color: #0b1120; }
+        .quality-C { background: #f59e0b; color: #0b1120; }
 
         /* ===== BOTÃO GERAR ===== */
         .btn-generate {
@@ -227,13 +239,13 @@
         }
         .timer-circular {
             position: relative;
-            width: 70px;
-            height: 70px;
+            width: 80px;
+            height: 80px;
         }
         .timer-circular svg {
             transform: rotate(-90deg);
-            width: 70px;
-            height: 70px;
+            width: 80px;
+            height: 80px;
         }
         .timer-circular .bg { fill: none; stroke: #1e293b; stroke-width: 6; }
         .timer-circular .progress {
@@ -241,7 +253,7 @@
             stroke: #fbbf24;
             stroke-width: 6;
             stroke-linecap: round;
-            stroke-dasharray: 188.5;
+            stroke-dasharray: 226.2; /* 2 * PI * 36 */
             stroke-dashoffset: 0;
             transition: stroke-dashoffset 0.5s ease;
         }
@@ -251,7 +263,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.4rem;
+            font-size: 1.2rem;
             font-weight: 700;
             color: #f1f5f9;
         }
@@ -531,14 +543,14 @@
                 <div id="timerArea" style="display: none;">
                     <div class="timer-container">
                         <div class="timer-circular">
-                            <svg viewBox="0 0 70 70">
-                                <circle class="bg" cx="35" cy="35" r="30"/>
-                                <circle class="progress" id="timerCircle" cx="35" cy="35" r="30"/>
+                            <svg viewBox="0 0 80 80">
+                                <circle class="bg" cx="40" cy="40" r="36"/>
+                                <circle class="progress" id="timerCircle" cx="40" cy="40" r="36"/>
                             </svg>
                             <div class="timer-text" id="timerTexto">--</div>
                         </div>
                         <div>
-                            <div class="timer-label">Entrada recomendada</div>
+                            <div class="timer-label">⏳ Tempo restante</div>
                             <div class="exp-sugestao" id="expSugestao"></div>
                         </div>
                     </div>
@@ -652,6 +664,7 @@
     let ultimoSinal = null;
     let ultimoTradeId = null;
     let chartInstance = null;
+    let tempoTotalSegundos = 0;   // armazena o total de segundos para o timer
 
     const btnGerar = document.getElementById('btnGerarSinal');
     const btnText = document.getElementById('btnText');
@@ -667,6 +680,8 @@
     const tradeActions = document.getElementById('tradeActions');
     const estrategiasList = document.getElementById('estrategiasList');
 
+    const CIRCUMFERENCE = 2 * Math.PI * 36; // ≈ 226.2
+
     // ==================== UTILITÁRIOS ====================
     function showToast(message, type = 'info') {
         const container = document.getElementById('toastContainer');
@@ -677,31 +692,38 @@
         setTimeout(() => toast.remove(), 4000);
     }
 
-    // ==================== TIMER CIRCULAR ====================
-    const CIRCUMFERENCE = 2 * Math.PI * 30;
-
-    function iniciarTimer(segundosRestantes) {
+    // ==================== TIMER (AGORA COM MINUTOS) ====================
+    function iniciarTimer(segundosTotais) {
         pararTimer();
+        if (!segundosTotais || segundosTotais < 60) segundosTotais = 180; // mínimo 3 min
+        tempoTotalSegundos = segundosTotais;
         timerArea.style.display = 'block';
-        let segundos = segundosRestantes || 60;
-        const total = segundos;
+        let segundosRestantes = segundosTotais;
 
         timerInterval = setInterval(() => {
-            segundos--;
-            const frac = segundos / total;
+            segundosRestantes--;
+            const frac = segundosRestantes / tempoTotalSegundos;
             const offset = CIRCUMFERENCE * (1 - frac);
             timerCircleEl.style.strokeDashoffset = offset;
-            timerTexto.textContent = `${Math.ceil(segundos)}s`;
-            if (segundos <= 0) {
+
+            const mins = Math.floor(segundosRestantes / 60);
+            const segs = segundosRestantes % 60;
+            timerTexto.textContent = `${mins}:${segs.toString().padStart(2, '0')}`;
+
+            if (segundosRestantes <= 0) {
                 pararTimer();
-                timerTexto.textContent = '0s';
+                timerTexto.textContent = '0:00';
                 timerCircleEl.style.strokeDashoffset = 0;
+                showToast('⏰ Tempo recomendado expirou!', 'info');
             }
         }, 1000);
 
+        // Inicializa
         timerCircleEl.style.strokeDasharray = CIRCUMFERENCE;
         timerCircleEl.style.strokeDashoffset = 0;
-        timerTexto.textContent = `${segundos}s`;
+        const minsIni = Math.floor(tempoTotalSegundos / 60);
+        const segsIni = tempoTotalSegundos % 60;
+        timerTexto.textContent = `${minsIni}:${segsIni.toString().padStart(2, '0')}`;
     }
 
     function pararTimer() {
@@ -737,15 +759,40 @@
             sinalAnalise.textContent = data.analise || 'Aguardando...';
         }
 
+        // Extrair qualidade se presente nos indicadores (para exibir badge)
+        let qualidade = '';
+        if (data.detalhes && data.detalhes.length > 0) {
+            // Procura o primeiro detalhe com qualidade
+            const primeiroComQualidade = data.detalhes.find(s => s.indicators && s.indicators.qualidade);
+            if (primeiroComQualidade) {
+                qualidade = primeiroComQualidade.indicators.qualidade;
+            }
+        }
+        // Se não encontrou, tenta no próprio data (se a estratégia principal tiver)
+        if (!qualidade && data.indicators && data.indicators.qualidade) {
+            qualidade = data.indicators.qualidade;
+        }
+
+        // Atualiza o score com badge de qualidade
+        let scoreHtml = `Score: ${data.score || 0}/5`;
+        if (qualidade) {
+            const cls = qualidade === 'A+' ? 'Aplus' : qualidade === 'A' ? 'A' : qualidade === 'B' ? 'B' : qualidade === 'C' ? 'C' : '';
+            if (cls) {
+                scoreHtml += ` <span class="quality-badge quality-${cls}">${qualidade}</span>`;
+            }
+        }
+        sinalScore.innerHTML = scoreHtml;
+
         // Detalhes das estratégias (lista)
         if (data.detalhes && data.detalhes.length > 0) {
             let html = '';
             data.detalhes.forEach(s => {
                 const sig = s.signal || '—';
                 const cls = sig === 'CALL' ? 'CALL' : sig === 'PUT' ? 'PUT' : '';
+                const qual = s.indicators && s.indicators.qualidade ? s.indicators.qualidade : '';
                 html += `
                     <div class="estrategia-item">
-                        <span class="estrategia-nome">${s.strategy || 'Desconhecida'}</span>
+                        <span class="estrategia-nome">${s.strategy || 'Desconhecida'} ${qual ? '['+qual+']' : ''}</span>
                         <span class="estrategia-sinal ${cls}">${sig}</span>
                         <span class="estrategia-confianca">${s.confidence || 0}%</span>
                         <span class="estrategia-score">${s.score || 0}</span>
@@ -757,15 +804,16 @@
             estrategiasList.innerHTML = '<div class="sem-sinal">Nenhum sinal de estratégias no momento.</div>';
         }
 
-        // Timer
+        // Timer: usa o tempo de expiração vindo do backend (já em minutos)
         if (data.direcao && data.direcao !== '---' && data.tempo_exp) {
             const expMin = data.tempo_exp;
+            const segundos = expMin * 60;
             let msg = '';
-            if (expMin === 1) msg = '⚡ Expiração recomendada: 1 min (sinal forte)';
-            else if (expMin === 2) msg = '🕒 Expiração: 2 min (moderado)';
-            else msg = '🐢 Expiração: 3 min (sinal fraco)';
+            if (expMin <= 3) msg = `⚡ Expiração recomendada: ${expMin} min (sinal de qualidade)`;
+            else if (expMin <= 4) msg = `🕒 Expiração: ${expMin} min (moderado)`;
+            else msg = `🐢 Expiração: ${expMin} min (sinal mais lento)`;
             expSugestao.textContent = msg;
-            iniciarTimer(60);
+            iniciarTimer(segundos);
         } else {
             pararTimer();
             tradeActions.style.display = 'none';
@@ -956,8 +1004,7 @@
         try {
             const resp = await fetch('/api/status');
             if (!resp.ok) return;
-            const data = await resp.json();
-            // Não fazemos nada com os dados, apenas evitamos erro 429
+            // Não usamos os dados, apenas para manter a sessão ativa
         } catch (e) {
             // ignora silenciosamente
         }
@@ -990,7 +1037,7 @@
     document.getElementById('btnLoss').addEventListener('click', () => registrarResultado('Perdeu'));
 
     // ==================== INICIALIZAÇÃO ====================
-    // Polling de status a cada 30 segundos (em vez de 5)
+    // Polling de status a cada 30 segundos
     setInterval(() => { atualizarStatus().catch(() => {}); }, 30000);
     atualizarStatus().catch(() => {});
 
