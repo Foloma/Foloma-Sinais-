@@ -9,7 +9,7 @@ class PriceActionStrategy(Strategy):
     - Filtro de tendência multi-timeframe (1min e 5min)
     - Score dinâmico com classificação A+ a F
     - ATR para filtro de volatilidade
-    - Confiança realista e expiração sugerida
+    - Confiança realista e expiração sugerida (mínimo 3min)
     """
     def __init__(self):
         self.name = "PriceAction"
@@ -171,10 +171,25 @@ class PriceActionStrategy(Strategy):
         return max(20, min(95, conf))
 
     def _calculate_expiry(self, qualidade, forca_tendencia):
-        base = {"A+": 1, "A": 1, "B": 2, "C": 3, "D": 4, "F": 5}.get(qualidade, 3)
-        if forca_tendencia > 0.7 and base > 1:
+        """
+        Expiração mais realista:
+        - Mínimo 3 minutos para dar tempo ao utilizador.
+        - A+/A → 3 min (antes 1 min)
+        - B/C → 4 min
+        - D/F → 5 min (mas D/F já são rejeitados)
+        """
+        base = {
+            "A+": 3,
+            "A": 3,
+            "B": 4,
+            "C": 4,
+            "D": 5,
+            "F": 5
+        }.get(qualidade, 4)
+        # Se tendência for muito forte e base > 3, reduz ligeiramente (mas nunca abaixo de 3)
+        if forca_tendencia > 0.7 and base > 3:
             base -= 1
-        return max(1, base)
+        return max(3, base)  # mínimo 3 minutos
 
     def _no_signal(self, symbol, motivo):
         return {
