@@ -46,8 +46,8 @@ class StrategyEngine:
 
         key = f"{symbol}_{interval}_{outputsize}"
         now = time.time()
-        # Cache por 30 segundos para reduzir chamadas à API
-        if key in self._cache and (now - self._cache_time.get(key, 0)) < 30:
+        # Cache aumentado para 60 segundos (antes 30)
+        if key in self._cache and (now - self._cache_time.get(key, 0)) < 60:
             logging.info(f"Usando cache para {symbol} {interval}")
             return self._cache[key]
 
@@ -105,8 +105,27 @@ class StrategyEngine:
         return decision
 
     def _decide(self, results):
+        """
+        Versão melhorada com decisão menos restritiva.
+        - Se diferença de confiança >= 10%, escolhe a de maior confiança.
+        - Se diferença de score >= 1.0, escolhe a de maior score.
+        - Caso contrário, força decisão pela de maior score (ou maior confiança).
+        """
         calls = [r for r in results if r["signal"] == "CALL"]
         puts = [r for r in results if r["signal"] == "PUT"]
+
+        if not calls and not puts:
+            return {
+                "ativo": None,
+                "direcao": None,
+                "score": 0,
+                "confianca": 0,
+                "estrategia": "Nenhum",
+                "analise": "Nenhuma estratégia gerou sinal.",
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "tempo_exp": None,
+                "detalhes": results
+            }
 
         if not calls:
             best = max(puts, key=lambda x: x["confidence"])
@@ -115,21 +134,24 @@ class StrategyEngine:
         else:
             best_call = max(calls, key=lambda x: x["confidence"])
             best_put = max(puts, key=lambda x: x["confidence"])
-            diff = abs(best_call["confidence"] - best_put["confidence"])
-            if diff >= 20:
+            
+            diff_conf = abs(best_call["confidence"] - best_put["confidence"])
+            diff_score = abs(best_call.get("score", 0) - best_put.get("score", 0))
+            
+            # Decisão melhorada
+            if diff_conf >= 10:
                 best = best_call if best_call["confidence"] > best_put["confidence"] else best_put
+            elif diff_score >= 1.0:
+                best = best_call if best_call.get("score", 0) > best_put.get("score", 0) else best_put
             else:
-                return {
-                    "ativo": None,
-                    "direcao": None,
-                    "score": 0,
-                    "confianca": 0,
-                    "estrategia": "Conflito",
-                    "analise": f"Conflito: CALL ({best_call['confidence']:.0f}%) vs PUT ({best_put['confidence']:.0f}%)",
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
-                    "tempo_exp": None,
-                    "detalhes": results
-                }
+                # Desempate: usa a que tem maior score (ou se igual, a de maior confiança)
+                if best_call.get("score", 0) > best_put.get("score", 0):
+                    best = best_call
+                elif best_call.get("score", 0) < best_put.get("score", 0):
+                    best = best_put
+                else:
+                    best = best_call if best_call["confidence"] > best_put["confidence"] else best_put
+                logging.info(f"Decisão forçada: {best['strategy']} ({best['signal']}) com confiança {best['confidence']}%")
 
         score = best.get("score", 0)
         tempo_exp = 1 if score >= 3.5 else 2 if score >= 2.5 else 3
