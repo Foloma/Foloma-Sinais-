@@ -31,13 +31,14 @@ limiter = Limiter(
 )
 
 # ---------- Configurações ----------
-SCORE_MINIMO = float(os.environ.get('SCORE_MINIMO', '1.5'))
+# Score mínimo reduzido para 1.0 (antes 1.5)
+SCORE_MINIMO = float(os.environ.get('SCORE_MINIMO', '1.0'))
 app.config['SCORE_MINIMO'] = SCORE_MINIMO
 
 AFFILIATE_LINK = os.environ.get('AFFILIATE_LINK', 'https://pocket-friends.co/r/br4kbim2pe')
 app.config['AFFILIATE_LINK'] = AFFILIATE_LINK
 
-# Inicializa o motor de estratégias (carrega todas as estratégias da pasta)
+# Inicializa o motor de estratégias
 engine = StrategyEngine()
 
 # ---------- Banco de dados ----------
@@ -145,7 +146,7 @@ def api_sinal():
 
 @app.route('/api/status')
 @login_required
-@limiter.limit("300 per hour")  # Aumentado de 100 para 300
+@limiter.limit("300 per hour")
 def api_status():
     return jsonify({symbol: 30 for symbol in engine.ATIVOS})
 
