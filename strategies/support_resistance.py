@@ -76,12 +76,14 @@ class SupportResistanceStrategy(Strategy):
                     reason += " (conflito com tendência de 5min)"
 
         confidence = min(100, max(0, score * 25))
-        return {
-            "symbol": symbol,
-            "signal": signal,
-            "confidence": confidence,
-            "score": score,
-            "reason": reason,
-            "strategy": self.name,
-            "indicators": {"support": suporte, "resistance": resistencia}
-        }
+        if score >= 1.0:
+            return {
+                "symbol": symbol,
+                "signal": signal,
+                "confidence": confidence,
+                "score": score,
+                "reason": reason,
+                "strategy": self.name,
+                "indicators": {"support": suporte, "resistance": resistencia}
+            }
+        return None
