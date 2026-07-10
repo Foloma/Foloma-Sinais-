@@ -13,6 +13,7 @@ class StrategyEngine:
     # Cache partilhado entre instâncias (em memória)
     _cache = {}
     _cache_time = {}
+    _last_request_time = 0  # para controlar taxa de chamadas
 
     def __init__(self):
         self.ATIVOS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "NZD/USD"]
@@ -46,13 +47,21 @@ class StrategyEngine:
 
         key = f"{symbol}_{interval}_{outputsize}"
         now = time.time()
-        # Cache aumentado para 60 segundos (antes 30)
-        if key in self._cache and (now - self._cache_time.get(key, 0)) < 60:
+        
+        # Cache aumentado para 120 segundos (antes 30/60)
+        if key in self._cache and (now - self._cache_time.get(key, 0)) < 120:
             logging.info(f"Usando cache para {symbol} {interval}")
             return self._cache[key]
 
+        # Controlo de taxa: respeita 8 chamadas/minuto (~7.5s entre chamadas)
+        # Para garantir, esperamos pelo menos 2 segundos entre chamadas
+        elapsed = now - self._last_request_time
+        if elapsed < 2.0:
+            time.sleep(2.0 - elapsed)
+        
         url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize={outputsize}&apikey={api_key}"
         try:
+            self._last_request_time = time.time()
             resp = requests.get(url, timeout=10)
             resp.raise_for_status()
             dados = resp.json()
@@ -60,7 +69,7 @@ class StrategyEngine:
                 precos = [float(v["close"]) for v in reversed(dados["values"])]
                 if len(precos) >= outputsize:
                     self._cache[key] = precos
-                    self._cache_time[key] = now
+                    self._cache_time[key] = time.time()
                     return precos
             return None
         except Exception as e:
@@ -138,13 +147,11 @@ class StrategyEngine:
             diff_conf = abs(best_call["confidence"] - best_put["confidence"])
             diff_score = abs(best_call.get("score", 0) - best_put.get("score", 0))
             
-            # Decisão melhorada
             if diff_conf >= 10:
                 best = best_call if best_call["confidence"] > best_put["confidence"] else best_put
             elif diff_score >= 1.0:
                 best = best_call if best_call.get("score", 0) > best_put.get("score", 0) else best_put
             else:
-                # Desempate: usa a que tem maior score (ou se igual, a de maior confiança)
                 if best_call.get("score", 0) > best_put.get("score", 0):
                     best = best_call
                 elif best_call.get("score", 0) < best_put.get("score", 0):
@@ -154,7 +161,11 @@ class StrategyEngine:
                 logging.info(f"Decisão forçada: {best['strategy']} ({best['signal']}) com confiança {best['confidence']}%")
 
         score = best.get("score", 0)
-        tempo_exp = 1 if score >= 3.5 else 2 if score >= 2.5 else 3
+        # Expiração dinâmica: usa a sugerida pela estratégia, ou fallback
+        tempo_exp = best.get("tempo_exp", 3)  # se a estratégia não fornecer, usa 3
+        # Garante que nunca seja inferior a 3 minutos
+        if tempo_exp < 3:
+            tempo_exp = 3
 
         return {
             "ativo": best.get("symbol"),
