@@ -46,12 +46,14 @@ class MomentumStrategy(Strategy):
                 reason += " (conflito com tendência 5min)"
 
         confidence = min(100, max(0, score * 25))
-        return {
-            "symbol": symbol,
-            "signal": signal,
-            "confidence": confidence,
-            "score": score,
-            "reason": reason,
-            "strategy": self.name,
-            "indicators": {"momentum": momentum, "ema20": ema20, "ema50": ema50}
-        }
+        if score >= 1.0:
+            return {
+                "symbol": symbol,
+                "signal": signal,
+                "confidence": confidence,
+                "score": score,
+                "reason": reason,
+                "strategy": self.name,
+                "indicators": {"momentum": momentum, "ema20": ema20, "ema50": ema50}
+            }
+        return None
