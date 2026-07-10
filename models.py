@@ -33,7 +33,7 @@ def get_db_conn():
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
-# ---------- Inicialização (com migração para novas colunas) ----------
+# ---------- Inicialização com migração ----------
 def init_db():
     with get_db_conn() as conn:
         # Tabela users
@@ -61,8 +61,7 @@ def init_db():
         # Índice
         conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id)')
         
-        # --- MIGRAÇÃO: adicionar colunas se não existirem (para bancos antigos) ---
-        # Verifica se a coluna 'estrategia' já existe
+        # Migração: adicionar colunas se não existirem (para bancos antigos)
         cursor = conn.execute("PRAGMA table_info(trades)")
         colunas = [col[1] for col in cursor.fetchall()]
         if 'estrategia' not in colunas:
@@ -117,7 +116,7 @@ def list_users():
         cursor = conn.execute('SELECT id, username, is_active, is_admin FROM users')
         return cursor.fetchall()
 
-# ---------- Trade functions (ATUALIZADAS) ----------
+# ---------- Trade functions ----------
 def add_trade(user_id, ativo, direcao, score, expiracao, resultado=None, estrategia=None, confianca=0):
     """Insere um novo trade com campos adicionais (estrategia e confianca)."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -160,64 +159,94 @@ def get_last_unresolved_trade(user_id):
         )
         return cursor.fetchone()
 
-# ---------- NOVAS FUNÇÕES PARA ESTATÍSTICAS ----------
+# ---------- Estatísticas (compatíveis com ou sem colunas extras) ----------
 def get_performance_stats(user_id):
-    """Retorna estatísticas de desempenho agregadas por estratégia, ativo, hora e dia da semana."""
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    
-    # Por estratégia
-    cursor.execute('''
-        SELECT estrategia, 
-               COUNT(*) as total, 
-               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
-               AVG(score) as avg_score,
-               AVG(confianca) as avg_confianca
-        FROM trades
-        WHERE user_id = ? AND resultado IS NOT NULL
-        GROUP BY estrategia
-    ''', (user_id,))
-    estrategias = cursor.fetchall()
+    """Retorna estatísticas de desempenho com tratamento de erros e compatibilidade."""
+    try:
+        conn = get_db_conn()
+        cursor = conn.cursor()
+        
+        # Verifica se a coluna 'estrategia' existe
+        cursor.execute("PRAGMA table_info(trades)")
+        colunas = [row[1] for row in cursor.fetchall()]
+        tem_estrategia = 'estrategia' in colunas
+        tem_confianca = 'confianca' in colunas
+        
+        # Query por estratégia (adaptativa)
+        if tem_estrategia and tem_confianca:
+            query_estrategia = '''
+                SELECT estrategia, 
+                       COUNT(*) as total, 
+                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
+                       AVG(score) as avg_score,
+                       AVG(confianca) as avg_confianca
+                FROM trades
+                WHERE user_id = ? AND resultado IS NOT NULL
+                GROUP BY estrategia
+            '''
+        else:
+            query_estrategia = '''
+                SELECT 'Desconhecida' as estrategia, 
+                       COUNT(*) as total, 
+                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
+                       AVG(score) as avg_score,
+                       0 as avg_confianca
+                FROM trades
+                WHERE user_id = ? AND resultado IS NOT NULL
+            '''
+        
+        cursor.execute(query_estrategia, (user_id,))
+        estrategias = cursor.fetchall()
 
-    # Por ativo
-    cursor.execute('''
-        SELECT ativo,
-               COUNT(*) as total,
-               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-        FROM trades
-        WHERE user_id = ? AND resultado IS NOT NULL
-        GROUP BY ativo
-    ''', (user_id,))
-    ativos = cursor.fetchall()
+        # Por ativo
+        cursor.execute('''
+            SELECT ativo,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
+            FROM trades
+            WHERE user_id = ? AND resultado IS NOT NULL
+            GROUP BY ativo
+        ''', (user_id,))
+        ativos = cursor.fetchall()
 
-    # Por hora do dia
-    cursor.execute('''
-        SELECT strftime('%H', timestamp) as hora,
-               COUNT(*) as total,
-               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-        FROM trades
-        WHERE user_id = ? AND resultado IS NOT NULL
-        GROUP BY hora
-        ORDER BY hora
-    ''', (user_id,))
-    horas = cursor.fetchall()
+        # Por hora
+        cursor.execute('''
+            SELECT strftime('%H', timestamp) as hora,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
+            FROM trades
+            WHERE user_id = ? AND resultado IS NOT NULL
+            GROUP BY hora
+            ORDER BY hora
+        ''', (user_id,))
+        horas = cursor.fetchall()
 
-    # Por dia da semana (0=Domingo, 6=Sábado)
-    cursor.execute('''
-        SELECT strftime('%w', timestamp) as dia_semana,
-               COUNT(*) as total,
-               SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-        FROM trades
-        WHERE user_id = ? AND resultado IS NOT NULL
-        GROUP BY dia_semana
-        ORDER BY dia_semana
-    ''', (user_id,))
-    dias = cursor.fetchall()
+        # Por dia da semana
+        cursor.execute('''
+            SELECT strftime('%w', timestamp) as dia_semana,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
+            FROM trades
+            WHERE user_id = ? AND resultado IS NOT NULL
+            GROUP BY dia_semana
+            ORDER BY dia_semana
+        ''', (user_id,))
+        dias = cursor.fetchall()
 
-    conn.close()
-    return {
-        "por_estrategia": estrategias,
-        "por_ativo": ativos,
-        "por_hora": horas,
-        "por_dia_semana": dias
-    }
+        conn.close()
+        
+        return {
+            "por_estrategia": estrategias,
+            "por_ativo": ativos,
+            "por_hora": horas,
+            "por_dia_semana": dias
+        }
+    except Exception as e:
+        logging.error(f"Erro em get_performance_stats: {e}", exc_info=True)
+        # Retorna estrutura vazia para evitar erro 500
+        return {
+            "por_estrategia": [],
+            "por_ativo": [],
+            "por_hora": [],
+            "por_dia_semana": []
+        }
