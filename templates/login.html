@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login | Foloma Visão 360</title>
-    <!-- Font Awesome para ícones -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         /* ===== RESET & BASE ===== */
@@ -215,12 +214,16 @@
 
         <!-- FORMULÁRIO -->
         <form method="post" onsubmit="return handleSubmit();">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
             <div class="form-group">
                 <label for="username"><i class="fas fa-user" style="margin-right:6px;"></i> Utilizador</label>
                 <div class="input-wrapper">
                     <i class="fas fa-user"></i>
-                    <input type="text" id="username" name="username" placeholder="Seu nome de utilizador" required
-                           value="{{ request.form.get('username', '') }}" autocomplete="username">
+                    <input type="text" id="username" name="username"
+                           placeholder="Seu nome de utilizador" required
+                           value="{{ request.form.get('username', '') }}"
+                           autocomplete="username" autofocus>
                 </div>
             </div>
 
@@ -228,7 +231,9 @@
                 <label for="password"><i class="fas fa-lock" style="margin-right:6px;"></i> Palavra-passe</label>
                 <div class="input-wrapper">
                     <i class="fas fa-key"></i>
-                    <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password">
+                    <input type="password" id="password" name="password"
+                           placeholder="••••••••" required
+                           autocomplete="current-password">
                 </div>
             </div>
 
@@ -245,7 +250,7 @@
             </a>
         </div>
 
-        <!-- FOOTER (opcional) -->
+        <!-- FOOTER -->
         <div style="text-align:center; margin-top:28px; font-size:0.7rem; color:#475569; border-top:1px solid rgba(255,255,255,0.04); padding-top:16px;">
             <i class="fas fa-lock" style="margin-right:4px;"></i> Ambiente seguro
         </div>
@@ -256,7 +261,6 @@
             const btn = document.getElementById('loginBtn');
             if (btn.disabled) return false;
 
-            // Desabilitar e mostrar spinner
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner"></span> A entrar...';
 
@@ -268,13 +272,12 @@
                 }
             }, 5000);
 
-            return true; // Permite o envio do formulário
+            return true;
         }
 
-        // Limpa mensagens flash após 5 segundos (opcional)
+        // Limpa mensagens flash após 5 segundos
         document.addEventListener('DOMContentLoaded', function() {
-            const flashes = document.querySelectorAll('.flash');
-            flashes.forEach(function(flash) {
+            document.querySelectorAll('.flash').forEach(function(flash) {
                 setTimeout(function() {
                     flash.style.opacity = '0';
                     setTimeout(function() {
