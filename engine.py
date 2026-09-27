@@ -1,255 +1,256 @@
 import os
-import sqlite3
 import logging
+import importlib
+import pkgutil
+import time
+import threading
 from datetime import datetime
-from flask_login import UserMixin
-from werkzeug.security import generate_password_hash, check_password_hash
+import requests
+
+import strategies
+from strategies.base import Strategy
 
 
-class User(UserMixin):
-    def __init__(self, id, username, password_hash, is_active=1, is_admin=0):
-        self.id = id
-        self.username = username
-        self.password_hash = password_hash
-        self._is_active = bool(is_active)
-        self.is_admin = bool(is_admin)
+class StrategyEngine:
+    """
+    Motor de estratégias com cache pré-aquecida em background.
 
-    @property
-    def is_active(self):
-        return self._is_active
+    Notas:
+    - Cache em memória por processo. Se correres vários workers gunicorn,
+      cada um terá a sua própria cache e a soma das chamadas à API
+      multiplica-se pelo nº de workers. Nesse caso: correr 1 worker, ou
+      usar Redis como backend de cache partilhada.
+    - Todos os acessos a _cache/_cache_time/_last_request_time passam pelo
+      self._lock. O sleep para respeitar o rate limit acontece FORA do lock.
+    - O endpoint time_series do TwelveData devolve OHLC completo; guardamos
+      'closes' (compatibilidade) e 'ohlc' (para padrões de vela).
+    """
 
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
+    CACHE_TTL = 120          # segundos que um valor de cache é válido
+    REQUEST_INTERVAL = 7.5   # segundos mínimos entre chamadas à API (8/min)
+    WARM_INTERVAL = 60       # segundos entre ciclos de pré-aquecimento
+    OUTPUTSIZE_1MIN = 60     # >= 50 para suportar EMA50 (Momentum)
+    OUTPUTSIZE_5MIN = 60
 
+    def __init__(self):
+        self.ATIVOS = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "NZD/USD"]
+        self.strategies = []
 
-_db_path = os.path.join(os.path.dirname(__file__), 'users.db')
+        self._lock = threading.Lock()
+        self._cache = {}          # key -> {"closes": [...], "ohlc": [...]}
+        self._cache_time = {}     # key -> timestamp de escrita
+        self._last_request_time = 0.0
+        self._stop_warm = threading.Event()
 
+        self.load_strategies()
+        logging.info(f"Motor carregado com {len(self.strategies)} estratégias.")
 
-def set_db_path(path):
-    global _db_path
-    _db_path = path
+        self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name="engine-warm")
+        self._warm_thread.start()
 
+    # ------------------------------------------------------------------
+    # Carregamento
+    # ------------------------------------------------------------------
+    def load_strategies(self):
+        for module_info in pkgutil.iter_modules(strategies.__path__):
+            module_name = module_info.name
+            if module_name in ['base', '__init__']:
+                continue
+            try:
+                module = importlib.import_module(f"strategies.{module_name}")
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if (isinstance(attr, type) and
+                            issubclass(attr, Strategy) and
+                            attr is not Strategy):
+                        self.strategies.append(attr())
+                        logging.info(f"Estratégia carregada: {attr.__name__}")
+            except Exception as e:
+                logging.error(f"Erro ao carregar estratégia {module_name}: {e}")
 
-def get_db_conn():
-    conn = sqlite3.connect(_db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def init_db():
-    with get_db_conn() as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS users
-                        (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                         username TEXT UNIQUE NOT NULL,
-                         password_hash TEXT NOT NULL,
-                         is_active INTEGER DEFAULT 1,
-                         is_admin INTEGER DEFAULT 0)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS trades
-                        (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                         user_id INTEGER NOT NULL,
-                         ativo TEXT NOT NULL,
-                         direcao TEXT NOT NULL,
-                         score REAL NOT NULL,
-                         expiracao INTEGER NOT NULL,
-                         resultado TEXT,
-                         estrategia TEXT,
-                         confianca REAL,
-                         timestamp TEXT NOT NULL,
-                         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)''')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id)')
-
-        cursor = conn.execute("PRAGMA table_info(trades)")
-        colunas = [col[1] for col in cursor.fetchall()]
-        if 'estrategia' not in colunas:
-            conn.execute('ALTER TABLE trades ADD COLUMN estrategia TEXT')
-        if 'confianca' not in colunas:
-            conn.execute('ALTER TABLE trades ADD COLUMN confianca REAL')
-
-        conn.commit()
-
-
-# ---------- User functions ----------
-def get_user_by_id(user_id):
-    with get_db_conn() as conn:
-        row = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
-        if row:
-            return User(row['id'], row['username'], row['password_hash'],
-                        row['is_active'], row['is_admin'])
-    return None
-
-
-def get_user_by_username(username):
-    with get_db_conn() as conn:
-        row = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
-        if row:
-            return User(row['id'], row['username'], row['password_hash'],
-                        row['is_active'], row['is_admin'])
-    return None
-
-
-def create_user(username, password, is_admin=False):
-    password_hash = generate_password_hash(password)
-    is_admin_flag = 1 if is_admin else 0
-    with get_db_conn() as conn:
-        try:
-            cursor = conn.execute(
-                'INSERT INTO users (username, password_hash, is_active, is_admin) VALUES (?, ?, 1, ?)',
-                (username, password_hash, is_admin_flag)
-            )
-            conn.commit()
-            return User(cursor.lastrowid, username, password_hash, 1, is_admin_flag)
-        except sqlite3.IntegrityError:
+    # ------------------------------------------------------------------
+    # Fetch de dados com OHLC + cache + lock
+    # ------------------------------------------------------------------
+    def _fetch_data(self, symbol, interval="1min", outputsize=60):
+        """
+        Devolve {"closes": [float, ...], "ohlc": [{"open","high","low","close"}, ...]}
+        ou None em caso de erro/dados insuficientes.
+        """
+        api_key = os.environ.get('TWELVE_DATA_API_KEY', '')
+        if not api_key:
+            logging.error("TWELVE_DATA_API_KEY não configurada.")
             return None
 
+        key = f"{symbol}_{interval}_{outputsize}"
+        now = time.time()
 
-def set_user_active(user_id, active):
-    with get_db_conn() as conn:
-        conn.execute('UPDATE users SET is_active = ? WHERE id = ?',
-                     (1 if active else 0, user_id))
-        conn.commit()
+        # Cache hit?
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None and (now - self._cache_time.get(key, 0)) < self.CACHE_TTL:
+                return cached
 
-
-def list_users():
-    with get_db_conn() as conn:
-        return conn.execute('SELECT id, username, is_active, is_admin FROM users').fetchall()
-
-
-# ---------- Trade functions ----------
-def add_trade(user_id, ativo, direcao, score, expiracao,
-              resultado=None, estrategia=None, confianca=0):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with get_db_conn() as conn:
-        cursor = conn.execute(
-            '''INSERT INTO trades
-               (user_id, ativo, direcao, score, expiracao, resultado,
-                estrategia, confianca, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            (user_id, ativo, direcao, score, expiracao, resultado,
-             estrategia, confianca, timestamp)
-        )
-        conn.commit()
-        return cursor.lastrowid
-
-
-def update_trade_result(trade_id, resultado, user_id=None):
-    """
-    Se user_id for fornecido, valida que o trade pertence a esse utilizador
-    (protege contra IDOR se um dia o trade_id vier do cliente).
-    """
-    with get_db_conn() as conn:
-        if user_id is not None:
-            row = conn.execute(
-                'SELECT user_id FROM trades WHERE id = ?', (trade_id,)
-            ).fetchone()
-            if not row or row['user_id'] != user_id:
-                return False
-        conn.execute('UPDATE trades SET resultado = ? WHERE id = ?', (resultado, trade_id))
-        conn.commit()
-        return True
-
-
-def get_user_trades(user_id, limit=50):
-    with get_db_conn() as conn:
-        return conn.execute(
-            '''SELECT id, ativo, direcao, score, expiracao, resultado,
-                      estrategia, confianca, timestamp
-               FROM trades
-               WHERE user_id = ?
-               ORDER BY timestamp DESC
-               LIMIT ?''',
-            (user_id, limit)
-        ).fetchall()
-
-
-def get_last_unresolved_trade(user_id):
-    with get_db_conn() as conn:
-        return conn.execute(
-            '''SELECT id, ativo, direcao, score, expiracao,
-                      estrategia, confianca, timestamp
-               FROM trades
-               WHERE user_id = ? AND resultado IS NULL
-               ORDER BY timestamp DESC
-               LIMIT 1''',
-            (user_id,)
-        ).fetchone()
-
-
-# ---------- Estatísticas ----------
-def get_performance_stats(user_id):
-    """
-    [C2] Devolve listas de dict (não sqlite3.Row) para permitir jsonify/tojson.
-    """
-    try:
-        with get_db_conn() as conn:
-            cursor = conn.execute("PRAGMA table_info(trades)")
-            colunas = [row[1] for row in cursor.fetchall()]
-            tem_estrategia = 'estrategia' in colunas
-            tem_confianca = 'confianca' in colunas
-
-            if tem_estrategia and tem_confianca:
-                q_est = '''
-                    SELECT estrategia,
-                           COUNT(*) as total,
-                           SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
-                           AVG(score) as avg_score,
-                           AVG(confianca) as avg_confianca
-                    FROM trades
-                    WHERE user_id = ? AND resultado IS NOT NULL
-                    GROUP BY estrategia
-                '''
+        # Reservar próximo slot de chamada à API (garante espaçamento global)
+        with self._lock:
+            next_allowed = self._last_request_time + self.REQUEST_INTERVAL
+            if now < next_allowed:
+                wait = next_allowed - now
             else:
-                q_est = '''
-                    SELECT 'Desconhecida' as estrategia,
-                           COUNT(*) as total,
-                           SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
-                           AVG(score) as avg_score,
-                           0 as avg_confianca
-                    FROM trades
-                    WHERE user_id = ? AND resultado IS NOT NULL
-                '''
+                wait = 0.0
+            self._last_request_time = max(now, next_allowed)
 
-            estrategias = conn.execute(q_est, (user_id,)).fetchall()
+        if wait > 0:
+            time.sleep(wait)
 
-            ativos = conn.execute('''
-                SELECT ativo,
-                       COUNT(*) as total,
-                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-                FROM trades
-                WHERE user_id = ? AND resultado IS NOT NULL
-                GROUP BY ativo
-            ''', (user_id,)).fetchall()
+        url = (
+            f"https://api.twelvedata.com/time_series"
+            f"?symbol={symbol}&interval={interval}"
+            f"&outputsize={outputsize}&apikey={api_key}"
+        )
+        try:
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 429:
+                logging.error(f"TwelveData 429 (rate limit) para {symbol} {interval}")
+                return None
+            resp.raise_for_status()
+            dados = resp.json()
 
-            horas = conn.execute('''
-                SELECT strftime('%H', timestamp) as hora,
-                       COUNT(*) as total,
-                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-                FROM trades
-                WHERE user_id = ? AND resultado IS NOT NULL
-                GROUP BY hora
-                ORDER BY hora
-            ''', (user_id,)).fetchall()
+            if "values" not in dados:
+                logging.warning(f"Sem 'values' para {symbol} {interval}: {dados.get('message', 'sem mensagem')}")
+                return None
 
-            dias = conn.execute('''
-                SELECT strftime('%w', timestamp) as dia_semana,
-                       COUNT(*) as total,
-                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-                FROM trades
-                WHERE user_id = ? AND resultado IS NOT NULL
-                GROUP BY dia_semana
-                ORDER BY dia_semana
-            ''', (user_id,)).fetchall()
+            closes = []
+            ohlc = []
+            for v in reversed(dados["values"]):
+                try:
+                    o = float(v["open"])
+                    h = float(v["high"])
+                    l = float(v["low"])
+                    c = float(v["close"])
+                except (KeyError, ValueError):
+                    continue
+                closes.append(c)
+                ohlc.append({"open": o, "high": h, "low": l, "close": c})
 
-            # [C2] conversão para dict serializável
+            if len(closes) < outputsize:
+                logging.warning(f"Dados insuficientes {symbol} {interval}: {len(closes)}/{outputsize}")
+                return None
+
+            result = {"closes": closes, "ohlc": ohlc}
+            with self._lock:
+                self._cache[key] = result
+                self._cache_time[key] = time.time()
+            return result
+
+        except requests.exceptions.Timeout:
+            logging.error(f"Timeout TwelveData {symbol} {interval}")
+            return None
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"Erro HTTP {symbol} {interval}: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"Erro ao buscar dados {symbol} {interval}: {e}", exc_info=True)
+            return None
+
+    # ------------------------------------------------------------------
+    # Warm loop em background (evita sleeps durante requests)
+    # ------------------------------------------------------------------
+    def _warm_loop(self):
+        while not self._stop_warm.is_set():
+            try:
+                for symbol in self.ATIVOS:
+                    for interval, size in (("1min", self.OUTPUTSIZE_1MIN),
+                                           ("5min", self.OUTPUTSIZE_5MIN)):
+                        # Força refresh (cache expirou naturalmente ou ainda não existe)
+                        self._fetch_data(symbol, interval, size)
+            except Exception as e:
+                logging.error(f"Warm loop erro: {e}", exc_info=True)
+            self._stop_warm.wait(self.WARM_INTERVAL)
+
+    # ------------------------------------------------------------------
+    # Decisão
+    # ------------------------------------------------------------------
+    def get_best_signal(self, score_minimo=1.0):
+        dados_1min = {}
+        dados_5min = {}
+        for symbol in self.ATIVOS:
+            dados_1min[symbol] = self._fetch_data(symbol, "1min", self.OUTPUTSIZE_1MIN)
+            dados_5min[symbol] = self._fetch_data(symbol, "5min", self.OUTPUTSIZE_5MIN)
+
+        all_results = []
+        for symbol in self.ATIVOS:
+            d1 = dados_1min.get(symbol)
+            d5 = dados_5min.get(symbol)
+            if d1 is None or d5 is None:
+                continue
+            for strategy in self.strategies:
+                try:
+                    result = strategy.analyze(symbol, d1, d5)
+                    if result and result.get("signal") is not None:
+                        all_results.append(result)
+                except Exception as e:
+                    logging.error(
+                        f"Erro na estratégia {strategy.__class__.__name__} "
+                        f"para {symbol}: {e}", exc_info=True
+                    )
+
+        # [1.7] Aplicar threshold aqui — antes era ignorado
+        all_results = [r for r in all_results if r.get("score", 0) >= score_minimo]
+
+        if not all_results:
             return {
-                "por_estrategia": [dict(r) for r in estrategias],
-                "por_ativo":      [dict(r) for r in ativos],
-                "por_hora":       [dict(r) for r in horas],
-                "por_dia_semana": [dict(r) for r in dias],
+                "ativo": None, "direcao": None, "score": 0, "confianca": 0,
+                "estrategia": None,
+                "analise": "Nenhum sinal forte no momento",
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "tempo_exp": None,
+                "indicators": {},
+                "detalhes": []
             }
-    except Exception as e:
-        logging.error(f"Erro em get_performance_stats: {e}", exc_info=True)
+
+        return self._decide(all_results)
+
+    def _decide(self, results):
+        calls = [r for r in results if r["signal"] == "CALL"]
+        puts  = [r for r in results if r["signal"] == "PUT"]
+
+        if not calls and not puts:
+            return {
+                "ativo": None, "direcao": None, "score": 0, "confianca": 0,
+                "estrategia": "Nenhum",
+                "analise": "Nenhuma estratégia gerou sinal.",
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "tempo_exp": None,
+                "indicators": {},
+                "detalhes": results
+            }
+
+        # [1.3] Desempate por score (escala comum após normalização nas
+        #      estratégias). A confidence continua a ser devolvida ao UI,
+        #      mas NÃO é usada para comparar entre estratégias.
+        if not puts:
+            best = max(calls, key=lambda x: x.get("score", 0))
+        elif not calls:
+            best = max(puts, key=lambda x: x.get("score", 0))
+        else:
+            best_call = max(calls, key=lambda x: x.get("score", 0))
+            best_put  = max(puts,  key=lambda x: x.get("score", 0))
+            best = best_call if best_call.get("score", 0) >= best_put.get("score", 0) else best_put
+
+        tempo_exp = best.get("tempo_exp", 3) or 3
+        if tempo_exp < 3:
+            tempo_exp = 3
+
         return {
-            "por_estrategia": [], "por_ativo": [],
-            "por_hora": [], "por_dia_semana": []
+            "ativo": best.get("symbol"),
+            "direcao": best["signal"],
+            "score": best.get("score", 0),
+            "confianca": best.get("confidence", 0),
+            "estrategia": best.get("strategy"),
+            "analise": best.get("reason", ""),
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "tempo_exp": tempo_exp,
+            # [Falta 3] propagar indicators do VENCEDOR, não de qualquer estratégia
+            "indicators": best.get("indicators", {}),
+            "detalhes": results
         }
