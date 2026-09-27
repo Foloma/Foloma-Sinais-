@@ -1,49 +1,68 @@
 from strategies.base import Strategy
 
+
 class BreakoutStrategy(Strategy):
+    """
+    Detecta rompimentos das Bandas de Bollinger em regime de baixa
+    volatilidade (squeeze).
+
+    Lógica:
+    - Calcula Bandas de Bollinger (20, 2σ) sobre os closes de 1min.
+    - Se a largura relativa da banda for > 3%, o mercado está em tendência
+      e a estratégia abstém-se (não é regime de breakout).
+    - Se o preço rompeu a banda superior  -> CALL
+    - Se o preço rompeu a banda inferior  -> PUT
+    - Se está dentro das bandas            -> None
+
+    Nota: usa apenas `data_1min["closes"]`. O `data_5min` é aceito por
+    contrato mas não é usado — não há aqui informação de 5min relevante.
+    """
+
+    BANDWIDTH_MAX = 3.0   # %
+    SCORE = 3.5           # fixo: todo o rompimento vale o mesmo
+    TEMPO_EXP = 3         # minutos (breakout → rápido, mínimo do engine)
+
     def __init__(self):
         self.name = "Breakout"
 
     def analyze(self, symbol, data_1min, data_5min):
-        if data_1min is None or len(data_1min) < 30:
+        # --- validação de entrada (novo formato: dict) ---
+        if not isinstance(data_1min, dict):
+            return None
+        precos = data_1min.get("closes")
+        if not precos or len(precos) < 30:
             return None
 
-        def bollinger(precos, periodo=20, desvios=2):
-            if len(precos) < periodo:
-                return None, None, None
-            ultimos = precos[-periodo:]
-            media = sum(ultimos) / periodo
-            var = sum((x - media) ** 2 for x in ultimos) / periodo
-            std = var ** 0.5
-            superior = media + desvios * std
-            inferior = media - desvios * std
-            return superior, media, inferior
-
-        sup, med, inf = bollinger(data_1min, 20, 2)
-        if None in (sup, inf):
-            return None
-        banda_width = (sup - inf) / med * 100
-
-        if banda_width > 3:
+        # --- cálculo das bandas ---
+        sup, med, inf = self._bollinger(precos, periodo=20, desvios=2)
+        if sup is None or inf is None or med == 0:
             return None
 
-        preco_atual = data_1min[-1]
-        signal = None
-        score = 0
-        reason = ""
+        banda_width = (sup - inf) / med * 100.0
+        if banda_width > self.BANDWIDTH_MAX:
+            # regime de tendência — breakout não é o setup adequado
+            return None
+
+        preco_atual = precos[-1]
 
         if preco_atual > sup:
             signal = "CALL"
-            score = 3.5
-            reason = f"Rompeu resistência da banda superior ({sup:.5f}), largura da banda: {banda_width:.2f}%"
+            reason = (
+                f"Rompeu resistência da banda superior ({sup:.5f}), "
+                f"largura da banda: {banda_width:.2f}%"
+            )
         elif preco_atual < inf:
             signal = "PUT"
-            score = 3.5
-            reason = f"Rompeu suporte da banda inferior ({inf:.5f}), largura da banda: {banda_width:.2f}%"
+            reason = (
+                f"Rompeu suporte da banda inferior ({inf:.5f}), "
+                f"largura da banda: {banda_width:.2f}%"
+            )
         else:
             return None
 
-        confidence = min(100, max(0, score * 25))
+        score = self.SCORE
+        confidence = self._score_to_confidence(score)
+
         return {
             "symbol": symbol,
             "signal": signal,
@@ -51,5 +70,35 @@ class BreakoutStrategy(Strategy):
             "score": score,
             "reason": reason,
             "strategy": self.name,
-            "indicators": {"bollinger_sup": sup, "bollinger_inf": inf, "bandwidth": banda_width}
+            "tempo_exp": self.TEMPO_EXP,
+            "indicators": {
+                "bollinger_sup": round(sup, 5),
+                "bollinger_med": round(med, 5),
+                "bollinger_inf": round(inf, 5),
+                "bandwidth": round(banda_width, 3),
+            },
         }
+
+    # ------------------------------------------------------------------
+    # Auxiliares
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _bollinger(precos, periodo=20, desvios=2):
+        """Devolve (superior, media, inferior) ou (None, None, None)."""
+        if len(precos) < periodo:
+            return None, None, None
+        ultimos = precos[-periodo:]
+        media = sum(ultimos) / periodo
+        var = sum((x - media) ** 2 for x in ultimos) / periodo
+        std = var ** 0.5
+        return media + desvios * std, media, media - desvios * std
+
+    @staticmethod
+    def _score_to_confidence(score):
+        """
+        Escala comum a todas as estratégias (ver base.py).
+        score 0   ->  20
+        score 2.5 ->  50
+        score 5   ->  95
+        """
+        return min(95, max(20, score * 20))
