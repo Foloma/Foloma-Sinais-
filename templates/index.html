@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Foloma Visão 360 · Sinais</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -86,15 +87,6 @@
             font-size: 0.9rem;
         }
         .user-area a:hover { color: #fbbf24; }
-        .badge-admin {
-            background: #fbbf24;
-            color: #0b1120;
-            padding: 2px 12px;
-            border-radius: 40px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
 
         /* ===== GRADE DE CARDS ===== */
         .dashboard-grid {
@@ -161,13 +153,6 @@
             word-break: break-word;
             text-align: left;
             margin: 12px 0;
-        }
-        .sinal-analise .conflito-detalhe {
-            background: rgba(251,191,36,0.05);
-            border-radius: 8px;
-            padding: 8px 12px;
-            margin-top: 6px;
-            font-size: 0.8rem;
         }
         .sinal-timestamp {
             font-size: 0.8rem;
@@ -253,7 +238,7 @@
             stroke: #fbbf24;
             stroke-width: 6;
             stroke-linecap: round;
-            stroke-dasharray: 226.2; /* 2 * PI * 36 */
+            stroke-dasharray: 226.2;
             stroke-dashoffset: 0;
             transition: stroke-dashoffset 0.5s ease;
         }
@@ -324,22 +309,27 @@
             transition: background 0.2s;
         }
         .estrategia-item:hover { background: rgba(30, 41, 59, 0.7); }
-        .estrategia-nome { font-weight: 600; color: #f1f5f9; }
+        .estrategia-nome { font-weight: 600; color: #f1f5f9; flex: 1; }
         .estrategia-sinal {
             font-weight: 700;
             padding: 2px 12px;
             border-radius: 40px;
             font-size: 0.75rem;
+            margin: 0 8px;
         }
         .estrategia-sinal.CALL { background: rgba(34,197,94,0.2); color: #22c55e; }
         .estrategia-sinal.PUT { background: rgba(239,68,68,0.2); color: #ef4444; }
         .estrategia-confianca {
             color: #94a3b8;
             font-size: 0.8rem;
+            min-width: 44px;
+            text-align: right;
         }
         .estrategia-score {
             color: #fbbf24;
             font-weight: 600;
+            min-width: 36px;
+            text-align: right;
         }
         .sem-sinal { color: #64748b; font-style: italic; text-align: center; padding: 16px; }
 
@@ -525,7 +515,7 @@
     <!-- GRID PRINCIPAL -->
     <div class="dashboard-grid">
 
-        <!-- COLUNA ESQUERDA: Sinal e Estratégias -->
+        <!-- COLUNA ESQUERDA -->
         <div class="card">
             <div class="card-title"><i class="fas fa-chart-line"></i> Sinal em Tempo Real</div>
             <button class="btn-generate" id="btnGerarSinal">
@@ -574,14 +564,14 @@
             </div>
         </div>
 
-        <!-- COLUNA DIREITA: Estatísticas + Gráfico -->
+        <!-- COLUNA DIREITA -->
         <div class="card">
             <div class="card-title"><i class="fas fa-chart-pie"></i> Estatísticas de Desempenho</div>
             <div id="statsContainer">
                 <div class="stats-grid" id="statsGrid">
                     <div class="stat-item"><div class="stat-value">--</div><div class="stat-label">Total Trades</div></div>
                     <div class="stat-item"><div class="stat-value">--</div><div class="stat-label">Taxa de Acerto</div></div>
-                    <div class="stat-item"><div class="stat-value">--</div><div class="stat-label">Melhor Estratégia</div></div>
+                    <div class="stat-item"><div class="stat-value">--</div><div class="stat-label">Melhor Estratégia</div><div class="stat-detail"></div></div>
                     <div class="stat-item"><div class="stat-value">--</div><div class="stat-label">Score Médio</div></div>
                 </div>
                 <div class="chart-container">
@@ -589,17 +579,19 @@
                 </div>
             </div>
 
-            <!-- Configurações -->
+            <!-- Configurações (só visível para admins) -->
+            {% if current_user.is_admin %}
             <div class="config-area">
                 <div class="config-group">
                     <label for="scoreMin">Score mínimo</label>
-                    <input type="number" id="scoreMin" step="0.5" min="0.5" max="5" value="1.5">
+                    <input type="number" id="scoreMin" step="0.5" min="0.5" max="5" value="{{ config_score_minimo or 1.0 }}">
                     <button id="btnConfig"><i class="fas fa-check"></i> Aplicar</button>
                 </div>
                 <div style="margin-left: auto; font-size:0.8rem; color:#64748b;">
-                    <i class="fas fa-info-circle"></i> Quanto maior o score, mais forte o sinal
+                    <i class="fas fa-info-circle"></i> Global a todos os utilizadores
                 </div>
             </div>
+            {% endif %}
         </div>
     </div>
 
@@ -650,7 +642,11 @@
 
     <!-- FOOTER -->
     <footer style="text-align:center; margin-top:32px; font-size:0.75rem; color:#334155; border-top:1px solid rgba(255,255,255,0.04); padding-top:16px;">
-        <i class="fas fa-database"></i> Dados: Twelve Data &nbsp;·&nbsp; <i class="fas fa-brain"></i> 6 estratégias em paralelo &nbsp;·&nbsp; Foloma Visão 360 v2.0
+        <i class="fas fa-database"></i> Dados: Twelve Data
+        &nbsp;·&nbsp;
+        <i class="fas fa-brain"></i> {{ num_estrategias or 5 }} estratégias em paralelo
+        &nbsp;·&nbsp;
+        Foloma Visão 360 v2.1
     </footer>
 </div>
 
@@ -658,13 +654,20 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
+    // ==================== CSRF ====================
+    const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+    function csrfHeaders(extra) {
+        return Object.assign({
+            'Content-Type': 'application/json',
+            'X-CSRFToken': CSRF_TOKEN
+        }, extra || {});
+    }
+
     // ==================== ESTADO ====================
     let timerInterval = null;
-    let timerCircle = null;
-    let ultimoSinal = null;
     let ultimoTradeId = null;
     let chartInstance = null;
-    let tempoTotalSegundos = 0;   // armazena o total de segundos para o timer
+    let tempoTotalSegundos = 0;
 
     const btnGerar = document.getElementById('btnGerarSinal');
     const btnText = document.getElementById('btnText');
@@ -680,7 +683,7 @@
     const tradeActions = document.getElementById('tradeActions');
     const estrategiasList = document.getElementById('estrategiasList');
 
-    const CIRCUMFERENCE = 2 * Math.PI * 36; // ≈ 226.2
+    const CIRCUMFERENCE = 2 * Math.PI * 36;
 
     // ==================== UTILITÁRIOS ====================
     function showToast(message, type = 'info') {
@@ -692,10 +695,10 @@
         setTimeout(() => toast.remove(), 4000);
     }
 
-    // ==================== TIMER (AGORA COM MINUTOS) ====================
+    // ==================== TIMER ====================
     function iniciarTimer(segundosTotais) {
         pararTimer();
-        if (!segundosTotais || segundosTotais < 60) segundosTotais = 180; // mínimo 3 min
+        if (!segundosTotais || segundosTotais < 60) segundosTotais = 180;
         tempoTotalSegundos = segundosTotais;
         timerArea.style.display = 'block';
         let segundosRestantes = segundosTotais;
@@ -718,7 +721,6 @@
             }
         }, 1000);
 
-        // Inicializa
         timerCircleEl.style.strokeDasharray = CIRCUMFERENCE;
         timerCircleEl.style.strokeDashoffset = 0;
         const minsIni = Math.floor(tempoTotalSegundos / 60);
@@ -741,58 +743,35 @@
         if (data.direcao === 'CALL') sinalDirecao.className = 'sinal-direcao CALL';
         else if (data.direcao === 'PUT') sinalDirecao.className = 'sinal-direcao PUT';
         else sinalDirecao.className = 'sinal-direcao';
-        sinalScore.textContent = `Score: ${data.score || 0}/5`;
+
         sinalTimestamp.textContent = data.timestamp ? `Última atualização: ${data.timestamp}` : '';
 
-        // Analise + detalhes de conflito
-        if (data.analise && data.analise.includes('Conflito')) {
-            let html = `<div style="font-weight:600; color:#fbbf24;">⚠️ ${data.analise}</div>`;
-            if (data.detalhes && data.detalhes.length > 0) {
-                html += '<div class="conflito-detalhe">';
-                data.detalhes.forEach(s => {
-                    html += `<div>${s.strategy}: ${s.signal} (${s.confidence}%) - Score: ${s.score}</div>`;
-                });
-                html += '</div>';
-            }
-            sinalAnalise.innerHTML = html;
-        } else {
-            sinalAnalise.textContent = data.analise || 'Aguardando...';
-        }
+        sinalAnalise.textContent = data.analise || 'Aguardando...';
 
-        // Extrair qualidade se presente nos indicadores (para exibir badge)
-        let qualidade = '';
-        if (data.detalhes && data.detalhes.length > 0) {
-            // Procura o primeiro detalhe com qualidade
-            const primeiroComQualidade = data.detalhes.find(s => s.indicators && s.indicators.qualidade);
-            if (primeiroComQualidade) {
-                qualidade = primeiroComQualidade.indicators.qualidade;
-            }
-        }
-        // Se não encontrou, tenta no próprio data (se a estratégia principal tiver)
-        if (!qualidade && data.indicators && data.indicators.qualidade) {
-            qualidade = data.indicators.qualidade;
-        }
-
-        // Atualiza o score com badge de qualidade
+        // Qualidade — agora lida do top-level (vencedor), não de detalhes
+        const qualidade = (data.indicators && data.indicators.qualidade) || '';
         let scoreHtml = `Score: ${data.score || 0}/5`;
         if (qualidade) {
-            const cls = qualidade === 'A+' ? 'Aplus' : qualidade === 'A' ? 'A' : qualidade === 'B' ? 'B' : qualidade === 'C' ? 'C' : '';
+            const cls = qualidade === 'A+' ? 'Aplus'
+                      : qualidade === 'A'  ? 'A'
+                      : qualidade === 'B'  ? 'B'
+                      : qualidade === 'C'  ? 'C' : '';
             if (cls) {
                 scoreHtml += ` <span class="quality-badge quality-${cls}">${qualidade}</span>`;
             }
         }
         sinalScore.innerHTML = scoreHtml;
 
-        // Detalhes das estratégias (lista)
+        // Detalhes das estratégias
         if (data.detalhes && data.detalhes.length > 0) {
             let html = '';
             data.detalhes.forEach(s => {
                 const sig = s.signal || '—';
                 const cls = sig === 'CALL' ? 'CALL' : sig === 'PUT' ? 'PUT' : '';
-                const qual = s.indicators && s.indicators.qualidade ? s.indicators.qualidade : '';
+                const qual = (s.indicators && s.indicators.qualidade) ? ` [${s.indicators.qualidade}]` : '';
                 html += `
                     <div class="estrategia-item">
-                        <span class="estrategia-nome">${s.strategy || 'Desconhecida'} ${qual ? '['+qual+']' : ''}</span>
+                        <span class="estrategia-nome">${s.strategy || 'Desconhecida'}${qual}</span>
                         <span class="estrategia-sinal ${cls}">${sig}</span>
                         <span class="estrategia-confianca">${s.confidence || 0}%</span>
                         <span class="estrategia-score">${s.score || 0}</span>
@@ -804,12 +783,12 @@
             estrategiasList.innerHTML = '<div class="sem-sinal">Nenhum sinal de estratégias no momento.</div>';
         }
 
-        // Timer: usa o tempo de expiração vindo do backend (já em minutos)
+        // Timer: usa tempo_exp vindo do backend (minutos)
         if (data.direcao && data.direcao !== '---' && data.tempo_exp) {
             const expMin = data.tempo_exp;
             const segundos = expMin * 60;
             let msg = '';
-            if (expMin <= 3) msg = `⚡ Expiração recomendada: ${expMin} min (sinal de qualidade)`;
+            if (expMin <= 3) msg = `⚡ Expiração recomendada: ${expMin} min (sinal rápido)`;
             else if (expMin <= 4) msg = `🕒 Expiração: ${expMin} min (moderado)`;
             else msg = `🐢 Expiração: ${expMin} min (sinal mais lento)`;
             expSugestao.textContent = msg;
@@ -822,23 +801,31 @@
 
     // ==================== BUSCAR SINAL ====================
     async function buscarSinal() {
+        // [2.2] Bloquear se há trade pendente — evita acumular pendentes
+        if (ultimoTradeId) {
+            showToast('Resolve o trade pendente antes de gerar outro.', 'info');
+            return;
+        }
+
         btnGerar.disabled = true;
         btnText.innerHTML = '<span class="spinner"></span> Analisando...';
-        ultimoTradeId = null;
         tradeActions.style.display = 'none';
         pararTimer();
 
         try {
             const resp = await fetch('/api/sinal');
+            if (resp.status === 429) {
+                showToast('Aguarda 1 minuto entre sinais (limite da API).', 'info');
+                return;
+            }
             if (!resp.ok) throw new Error('Erro na requisição');
             const data = await resp.json();
-            ultimoSinal = data;
             atualizarSinal(data);
 
             if (data.direcao && data.direcao !== '---') {
                 const regResp = await fetch('/api/registar_trade', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: csrfHeaders(),
                     body: JSON.stringify({
                         ativo: data.ativo,
                         direcao: data.direcao,
@@ -858,9 +845,6 @@
                 }
             } else {
                 tradeActions.style.display = 'none';
-                if (data.analise && data.analise.includes('Conflito')) {
-                    showToast('⚠️ Conflito entre estratégias. Nenhum sinal gerado.', 'info');
-                }
             }
         } catch (e) {
             console.error(e);
@@ -883,12 +867,16 @@
         try {
             const resp = await fetch('/api/resultado_trade', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ resultado })
+                headers: csrfHeaders(),
+                body: JSON.stringify({
+                    resultado: resultado,
+                    trade_id: ultimoTradeId
+                })
             });
             const data = await resp.json();
             if (data.status === 'ok') {
                 showToast(`Trade registado como ${resultado}!`, 'success');
+                ultimoTradeId = null;
                 window.location.reload();
             } else {
                 showToast('Erro: ' + (data.msg || ''), 'error');
@@ -906,31 +894,34 @@
     async function carregarEstatisticas() {
         try {
             const resp = await fetch('/api/estatisticas');
-            if (!resp.ok) return;
+            if (!resp.ok) {
+                console.warn('Estatísticas indisponíveis (HTTP ' + resp.status + ')');
+                return;
+            }
             const data = await resp.json();
 
             let total = 0, ganhos = 0;
             let melhorEstrategia = { nome: '—', acerto: 0 };
             let somaScore = 0, countScore = 0;
 
-            if (data.por_estrategia) {
-                data.por_estrategia.forEach(e => {
-                    total += e.total;
-                    ganhos += e.ganhos || 0;
-                    const taxa = e.total ? (e.ganhos / e.total * 100) : 0;
-                    if (taxa > melhorEstrategia.acerto && e.total >= 3) {
-                        melhorEstrategia = { nome: e.estrategia || '—', acerto: taxa };
-                    }
-                    if (e.avg_score) { somaScore += e.avg_score * e.total; countScore += e.total; }
-                });
-            }
+            (data.por_estrategia || []).forEach(e => {
+                total += e.total;
+                ganhos += e.ganhos || 0;
+                const taxa = e.total ? (e.ganhos / e.total * 100) : 0;
+                if (taxa > melhorEstrategia.acerto && e.total >= 3) {
+                    melhorEstrategia = { nome: e.estrategia || '—', acerto: taxa };
+                }
+                if (e.avg_score) { somaScore += e.avg_score * e.total; countScore += e.total; }
+            });
+
             const taxaAcerto = total ? (ganhos / total * 100) : 0;
             const scoreMedio = countScore ? (somaScore / countScore) : 0;
 
             document.querySelector('#statsGrid .stat-item:nth-child(1) .stat-value').textContent = total;
             document.querySelector('#statsGrid .stat-item:nth-child(2) .stat-value').textContent = taxaAcerto.toFixed(1) + '%';
             document.querySelector('#statsGrid .stat-item:nth-child(3) .stat-value').textContent = melhorEstrategia.nome;
-            document.querySelector('#statsGrid .stat-item:nth-child(3) .stat-detail').textContent = melhorEstrategia.acerto.toFixed(1) + '% acerto';
+            document.querySelector('#statsGrid .stat-item:nth-child(3) .stat-detail').textContent =
+                melhorEstrategia.acerto ? melhorEstrategia.acerto.toFixed(1) + '% acerto' : '';
             document.querySelector('#statsGrid .stat-item:nth-child(4) .stat-value').textContent = scoreMedio.toFixed(2);
 
             if (data.por_dia_semana && data.por_dia_semana.length) {
@@ -961,9 +952,19 @@
                 type: 'line',
                 data: {
                     labels: ['Sem dados'],
-                    datasets: [{ label: 'Taxa de Acerto', data: [0], borderColor: '#fbbf24', backgroundColor: 'rgba(251,191,36,0.1)', tension: 0.3 }]
+                    datasets: [{
+                        label: 'Taxa de Acerto',
+                        data: [0],
+                        borderColor: '#fbbf24',
+                        backgroundColor: 'rgba(251,191,36,0.1)',
+                        tension: 0.3
+                    }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } }
+                }
             });
             return;
         }
@@ -992,44 +993,45 @@
                     tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(1)}%` } }
                 },
                 scales: {
-                    y: { beginAtZero: true, max: 100, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-                    x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+                    y: {
+                        beginAtZero: true, max: 100,
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8' }
+                    }
                 }
             }
         });
     }
 
-    // ==================== STATUS (polling reduzido) ====================
-    async function atualizarStatus() {
-        try {
-            const resp = await fetch('/api/status');
-            if (!resp.ok) return;
-            // Não usamos os dados, apenas para manter a sessão ativa
-        } catch (e) {
-            // ignora silenciosamente
-        }
-    }
-
-    // ==================== CONFIG ====================
-    document.getElementById('btnConfig').addEventListener('click', async () => {
-        const novoScore = parseFloat(document.getElementById('scoreMin').value);
-        if (isNaN(novoScore)) return showToast('Valor inválido', 'error');
-        try {
-            const resp = await fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ score_minimo: novoScore })
-            });
-            const result = await resp.json();
-            if (result.status === 'ok') {
-                showToast(`Score mínimo alterado para ${result.score_minimo}`, 'success');
-            } else {
-                showToast('Erro ao alterar score', 'error');
+    // ==================== CONFIG (só admin) ====================
+    const btnConfig = document.getElementById('btnConfig');
+    if (btnConfig) {
+        btnConfig.addEventListener('click', async () => {
+            const novoScore = parseFloat(document.getElementById('scoreMin').value);
+            if (isNaN(novoScore) || novoScore < 0.5 || novoScore > 5.0) {
+                return showToast('Score deve estar entre 0.5 e 5.0', 'error');
             }
-        } catch (e) {
-            showToast('Erro de comunicação', 'error');
-        }
-    });
+            try {
+                const resp = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: csrfHeaders(),
+                    body: JSON.stringify({ score_minimo: novoScore })
+                });
+                const result = await resp.json();
+                if (result.status === 'ok') {
+                    showToast(`Score mínimo alterado para ${result.score_minimo}`, 'success');
+                } else {
+                    showToast('Erro: ' + (result.msg || 'sem detalhe'), 'error');
+                }
+            } catch (e) {
+                showToast('Erro de comunicação', 'error');
+            }
+        });
+    }
 
     // ==================== EVENTOS ====================
     btnGerar.addEventListener('click', buscarSinal);
@@ -1037,13 +1039,8 @@
     document.getElementById('btnLoss').addEventListener('click', () => registrarResultado('Perdeu'));
 
     // ==================== INICIALIZAÇÃO ====================
-    // Polling de status a cada 30 segundos
-    setInterval(() => { atualizarStatus().catch(() => {}); }, 30000);
-    atualizarStatus().catch(() => {});
-
-    // Estatísticas
     carregarEstatisticas();
-    setInterval(carregarEstatisticas, 60000); // a cada 1 minuto
+    setInterval(carregarEstatisticas, 60000);
 
     btnGerar.disabled = false;
 </script>
