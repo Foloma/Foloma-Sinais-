@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Registo via Afiliado | Foloma Visão 360</title>
-    <!-- Font Awesome para ícones -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         /* ===== RESET & BASE ===== */
@@ -217,13 +216,14 @@
         <div class="checkbox-wrapper">
             <input type="checkbox" id="confirmacao">
             <label for="confirmacao">
-                ✅ Já me cadastrei através do <a href="{{ affiliate_link }}" target="_blank">link de afiliado</a>.
+                ✅ Já me cadastrei através do
+                <a href="{{ affiliate_link }}" target="_blank" rel="noopener noreferrer">link de afiliado</a>.
             </label>
         </div>
 
         <!-- BOTÃO CONTINUAR -->
         <button id="continuar" class="btn-continue" disabled>
-            <i class="fas fa-arrow-right"></i> Continuar para Registo
+            <i class="fas fa-arrow-right"></i> Marque a caixa para continuar
         </button>
 
         <!-- FOOTER -->
@@ -255,11 +255,13 @@
             // Redireciona para o registo após confirmar
             btn.addEventListener('click', function() {
                 if (btn.disabled) return;
+
                 // Define cookie com validade de 30 minutos
                 const now = new Date();
                 now.setTime(now.getTime() + 30 * 60 * 1000);
-                document.cookie = "afiliado_confirmado=1; expires=" + now.toUTCString() + "; path=/; SameSite=Lax";
-                // Redireciona
+                document.cookie = "afiliado_confirmado=1; expires=" + now.toUTCString()
+                                  + "; path=/; SameSite=Lax; Secure";
+
                 window.location.href = "{{ url_for('register') }}";
             });
 
