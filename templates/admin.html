@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin | Foloma Visão 360</title>
-    <!-- Font Awesome para ícones -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         /* ===== RESET & BASE ===== */
@@ -50,9 +49,7 @@
             align-items: center;
             gap: 10px;
         }
-        .header h1 i {
-            -webkit-text-fill-color: #fbbf24;
-        }
+        .header h1 i { -webkit-text-fill-color: #fbbf24; }
         .header .user-info {
             display: flex;
             align-items: center;
@@ -75,7 +72,7 @@
         }
         .header .user-info a:hover { color: #fbbf24; }
 
-        /* ===== TOAST / FLASH ===== */
+        /* ===== FLASH ===== */
         .flash-message {
             padding: 14px 20px;
             border-radius: 16px;
@@ -91,7 +88,7 @@
         .flash-message.info { background: rgba(251,191,36,0.12); color: #fbbf24; border-left: 4px solid #fbbf24; }
         @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
-        /* ===== ESTATÍSTICAS RÁPIDAS ===== */
+        /* ===== STATS MINI ===== */
         .stats-mini {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -127,9 +124,7 @@
             border-collapse: collapse;
             font-size: 0.9rem;
         }
-        thead {
-            background: rgba(30, 41, 59, 0.6);
-        }
+        thead { background: rgba(30, 41, 59, 0.6); }
         th {
             padding: 14px 16px;
             text-align: left;
@@ -145,9 +140,7 @@
             border-bottom: 1px solid rgba(255,255,255,0.04);
             vertical-align: middle;
         }
-        tr:hover td {
-            background: rgba(30, 41, 59, 0.3);
-        }
+        tr:hover td { background: rgba(30, 41, 59, 0.3); }
         .badge-status {
             display: inline-block;
             padding: 2px 14px;
@@ -198,7 +191,6 @@
             padding-top: 16px;
             border-top: 1px solid rgba(255,255,255,0.05);
         }
-        .actions .btn i { font-size: 0.9rem; }
 
         /* ===== RESPONSIVO ===== */
         @media (max-width: 640px) {
@@ -237,7 +229,7 @@
           {% endif %}
         {% endwith %}
 
-        <!-- STATS MINI (calculados a partir da lista de users) -->
+        <!-- STATS MINI -->
         <div class="stats-mini">
             <div class="stat-mini-item">
                 <div class="value">{{ users|length }}</div>
@@ -290,10 +282,15 @@
                                     <i class="fas fa-lock"></i> Própria
                                 </span>
                             {% else %}
-                            <form method="POST" action="{{ url_for('admin_toggle', user_id=user['id']) }}" class="inline"
-                                  onsubmit="return confirm('Tem a certeza que deseja {% if user['is_active'] %}desactivar{% else %}activar{% endif %} o utilizador {{ user['username'] }}?');"
+                            <form method="POST"
+                                  action="{{ url_for('admin_toggle', user_id=user['id']) }}"
+                                  class="toggle-form"
+                                  data-username="{{ user['username'] }}"
+                                  data-active="{{ 1 if user['is_active'] else 0 }}"
                                   style="display:inline;">
-                                <button type="submit" class="btn btn-sm {% if user['is_active'] %}btn-danger{% else %}btn-success{% endif %}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit"
+                                        class="btn btn-sm {% if user['is_active'] %}btn-danger{% else %}btn-success{% endif %}">
                                     {% if user['is_active'] %}
                                         <i class="fas fa-user-slash"></i> Desactivar
                                     {% else %}
@@ -312,14 +309,26 @@
         <!-- AÇÕES RÁPIDAS -->
         <div class="actions">
             <a href="{{ url_for('index') }}" class="btn"><i class="fas fa-home"></i> Painel Principal</a>
-            <a href="{{ url_for('estatisticas') }}" class="btn"><i class="fas fa-chart-bar"></i> Estatísticas Globais</a>
-            <!-- Botão para criar novo utilizador (se implementado) -->
-            <!-- <a href="#" class="btn btn-success"><i class="fas fa-user-plus"></i> Novo Utilizador</a> -->
+            <a href="{{ url_for('estatisticas') }}" class="btn"><i class="fas fa-chart-bar"></i> Minhas Estatísticas</a>
         </div>
 
         <footer style="margin-top:32px; text-align:center; font-size:0.75rem; color:#475569; border-top:1px solid rgba(255,255,255,0.04); padding-top:16px;">
-            <i class="fas fa-shield-alt"></i> Área restrita a administradores &nbsp;·&nbsp; Foloma Visão 360 v2.0
+            <i class="fas fa-shield-alt"></i> Área restrita a administradores &nbsp;·&nbsp; Foloma Visão 360 v2.1
         </footer>
     </div>
+
+    <script>
+        // Confirm dialog sem interpolar strings no onsubmit
+        document.querySelectorAll('.toggle-form').forEach(function(form) {
+            form.addEventListener('submit', function(e) {
+                const username = form.dataset.username;
+                const isActive = form.dataset.active === '1';
+                const acao = isActive ? 'desactivar' : 'activar';
+                if (!confirm(`Tem a certeza que deseja ${acao} o utilizador ${username}?`)) {
+                    e.preventDefault();
+                }
+            });
+        });
+    </script>
 </body>
 </html>
