@@ -1,8 +1,10 @@
 import os
 import sqlite3
+import logging
 from datetime import datetime
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
+
 
 class User(UserMixin):
     def __init__(self, id, username, password_hash, is_active=1, is_admin=0):
@@ -19,32 +21,30 @@ class User(UserMixin):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-# ---------- Conexão segura à base de dados ----------
+
 _db_path = os.path.join(os.path.dirname(__file__), 'users.db')
+
 
 def set_db_path(path):
     global _db_path
     _db_path = path
 
+
 def get_db_conn():
-    """Retorna uma conexão SQLite com row_factory e foreign_keys ativadas."""
     conn = sqlite3.connect(_db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
-# ---------- Inicialização com migração ----------
+
 def init_db():
     with get_db_conn() as conn:
-        # Tabela users
         conn.execute('''CREATE TABLE IF NOT EXISTS users
                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
                          username TEXT UNIQUE NOT NULL,
                          password_hash TEXT NOT NULL,
                          is_active INTEGER DEFAULT 1,
                          is_admin INTEGER DEFAULT 0)''')
-        
-        # Tabela trades com as novas colunas estrategia e confianca
         conn.execute('''CREATE TABLE IF NOT EXISTS trades
                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
                          user_id INTEGER NOT NULL,
@@ -57,38 +57,36 @@ def init_db():
                          confianca REAL,
                          timestamp TEXT NOT NULL,
                          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)''')
-        
-        # Índice
         conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id)')
-        
-        # Migração: adicionar colunas se não existirem (para bancos antigos)
+
         cursor = conn.execute("PRAGMA table_info(trades)")
         colunas = [col[1] for col in cursor.fetchall()]
         if 'estrategia' not in colunas:
             conn.execute('ALTER TABLE trades ADD COLUMN estrategia TEXT')
         if 'confianca' not in colunas:
             conn.execute('ALTER TABLE trades ADD COLUMN confianca REAL')
-        
+
         conn.commit()
+
 
 # ---------- User functions ----------
 def get_user_by_id(user_id):
     with get_db_conn() as conn:
-        cursor = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,))
-        row = cursor.fetchone()
+        row = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
         if row:
             return User(row['id'], row['username'], row['password_hash'],
                         row['is_active'], row['is_admin'])
     return None
 
+
 def get_user_by_username(username):
     with get_db_conn() as conn:
-        cursor = conn.execute('SELECT * FROM users WHERE username = ?', (username,))
-        row = cursor.fetchone()
+        row = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         if row:
             return User(row['id'], row['username'], row['password_hash'],
                         row['is_active'], row['is_admin'])
     return None
+
 
 def create_user(username, password, is_admin=False):
     password_hash = generate_password_hash(password)
@@ -100,10 +98,10 @@ def create_user(username, password, is_admin=False):
                 (username, password_hash, is_admin_flag)
             )
             conn.commit()
-            user_id = cursor.lastrowid
-            return User(user_id, username, password_hash, 1, is_admin_flag)
+            return User(cursor.lastrowid, username, password_hash, 1, is_admin_flag)
         except sqlite3.IntegrityError:
             return None
+
 
 def set_user_active(user_id, active):
     with get_db_conn() as conn:
@@ -111,142 +109,147 @@ def set_user_active(user_id, active):
                      (1 if active else 0, user_id))
         conn.commit()
 
+
 def list_users():
     with get_db_conn() as conn:
-        cursor = conn.execute('SELECT id, username, is_active, is_admin FROM users')
-        return cursor.fetchall()
+        return conn.execute('SELECT id, username, is_active, is_admin FROM users').fetchall()
+
 
 # ---------- Trade functions ----------
-def add_trade(user_id, ativo, direcao, score, expiracao, resultado=None, estrategia=None, confianca=0):
-    """Insere um novo trade com campos adicionais (estrategia e confianca)."""
+def add_trade(user_id, ativo, direcao, score, expiracao,
+              resultado=None, estrategia=None, confianca=0):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with get_db_conn() as conn:
         cursor = conn.execute(
-            '''INSERT INTO trades 
-               (user_id, ativo, direcao, score, expiracao, resultado, estrategia, confianca, timestamp)
+            '''INSERT INTO trades
+               (user_id, ativo, direcao, score, expiracao, resultado,
+                estrategia, confianca, timestamp)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            (user_id, ativo, direcao, score, expiracao, resultado, estrategia, confianca, timestamp)
+            (user_id, ativo, direcao, score, expiracao, resultado,
+             estrategia, confianca, timestamp)
         )
         conn.commit()
         return cursor.lastrowid
 
-def update_trade_result(trade_id, resultado):
+
+def update_trade_result(trade_id, resultado, user_id=None):
+    """
+    Se user_id for fornecido, valida que o trade pertence a esse utilizador
+    (protege contra IDOR se um dia o trade_id vier do cliente).
+    """
     with get_db_conn() as conn:
+        if user_id is not None:
+            row = conn.execute(
+                'SELECT user_id FROM trades WHERE id = ?', (trade_id,)
+            ).fetchone()
+            if not row or row['user_id'] != user_id:
+                return False
         conn.execute('UPDATE trades SET resultado = ? WHERE id = ?', (resultado, trade_id))
         conn.commit()
+        return True
+
 
 def get_user_trades(user_id, limit=50):
     with get_db_conn() as conn:
-        cursor = conn.execute(
-            '''SELECT id, ativo, direcao, score, expiracao, resultado, estrategia, confianca, timestamp 
-               FROM trades 
-               WHERE user_id = ? 
-               ORDER BY timestamp DESC 
+        return conn.execute(
+            '''SELECT id, ativo, direcao, score, expiracao, resultado,
+                      estrategia, confianca, timestamp
+               FROM trades
+               WHERE user_id = ?
+               ORDER BY timestamp DESC
                LIMIT ?''',
             (user_id, limit)
-        )
-        return cursor.fetchall()
+        ).fetchall()
+
 
 def get_last_unresolved_trade(user_id):
     with get_db_conn() as conn:
-        cursor = conn.execute(
-            '''SELECT id, ativo, direcao, score, expiracao, estrategia, confianca, timestamp 
-               FROM trades 
-               WHERE user_id = ? AND resultado IS NULL 
-               ORDER BY timestamp DESC 
+        return conn.execute(
+            '''SELECT id, ativo, direcao, score, expiracao,
+                      estrategia, confianca, timestamp
+               FROM trades
+               WHERE user_id = ? AND resultado IS NULL
+               ORDER BY timestamp DESC
                LIMIT 1''',
             (user_id,)
-        )
-        return cursor.fetchone()
+        ).fetchone()
 
-# ---------- Estatísticas (compatíveis com ou sem colunas extras) ----------
+
+# ---------- Estatísticas ----------
 def get_performance_stats(user_id):
-    """Retorna estatísticas de desempenho com tratamento de erros e compatibilidade."""
+    """
+    [C2] Devolve listas de dict (não sqlite3.Row) para permitir jsonify/tojson.
+    """
     try:
-        conn = get_db_conn()
-        cursor = conn.cursor()
-        
-        # Verifica se a coluna 'estrategia' existe
-        cursor.execute("PRAGMA table_info(trades)")
-        colunas = [row[1] for row in cursor.fetchall()]
-        tem_estrategia = 'estrategia' in colunas
-        tem_confianca = 'confianca' in colunas
-        
-        # Query por estratégia (adaptativa)
-        if tem_estrategia and tem_confianca:
-            query_estrategia = '''
-                SELECT estrategia, 
-                       COUNT(*) as total, 
-                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
-                       AVG(score) as avg_score,
-                       AVG(confianca) as avg_confianca
+        with get_db_conn() as conn:
+            cursor = conn.execute("PRAGMA table_info(trades)")
+            colunas = [row[1] for row in cursor.fetchall()]
+            tem_estrategia = 'estrategia' in colunas
+            tem_confianca = 'confianca' in colunas
+
+            if tem_estrategia and tem_confianca:
+                q_est = '''
+                    SELECT estrategia,
+                           COUNT(*) as total,
+                           SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
+                           AVG(score) as avg_score,
+                           AVG(confianca) as avg_confianca
+                    FROM trades
+                    WHERE user_id = ? AND resultado IS NOT NULL
+                    GROUP BY estrategia
+                '''
+            else:
+                q_est = '''
+                    SELECT 'Desconhecida' as estrategia,
+                           COUNT(*) as total,
+                           SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
+                           AVG(score) as avg_score,
+                           0 as avg_confianca
+                    FROM trades
+                    WHERE user_id = ? AND resultado IS NOT NULL
+                '''
+
+            estrategias = conn.execute(q_est, (user_id,)).fetchall()
+
+            ativos = conn.execute('''
+                SELECT ativo,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
                 FROM trades
                 WHERE user_id = ? AND resultado IS NOT NULL
-                GROUP BY estrategia
-            '''
-        else:
-            query_estrategia = '''
-                SELECT 'Desconhecida' as estrategia, 
-                       COUNT(*) as total, 
-                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos,
-                       AVG(score) as avg_score,
-                       0 as avg_confianca
+                GROUP BY ativo
+            ''', (user_id,)).fetchall()
+
+            horas = conn.execute('''
+                SELECT strftime('%H', timestamp) as hora,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
                 FROM trades
                 WHERE user_id = ? AND resultado IS NOT NULL
-            '''
-        
-        cursor.execute(query_estrategia, (user_id,))
-        estrategias = cursor.fetchall()
+                GROUP BY hora
+                ORDER BY hora
+            ''', (user_id,)).fetchall()
 
-        # Por ativo
-        cursor.execute('''
-            SELECT ativo,
-                   COUNT(*) as total,
-                   SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-            FROM trades
-            WHERE user_id = ? AND resultado IS NOT NULL
-            GROUP BY ativo
-        ''', (user_id,))
-        ativos = cursor.fetchall()
+            dias = conn.execute('''
+                SELECT strftime('%w', timestamp) as dia_semana,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
+                FROM trades
+                WHERE user_id = ? AND resultado IS NOT NULL
+                GROUP BY dia_semana
+                ORDER BY dia_semana
+            ''', (user_id,)).fetchall()
 
-        # Por hora
-        cursor.execute('''
-            SELECT strftime('%H', timestamp) as hora,
-                   COUNT(*) as total,
-                   SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-            FROM trades
-            WHERE user_id = ? AND resultado IS NOT NULL
-            GROUP BY hora
-            ORDER BY hora
-        ''', (user_id,))
-        horas = cursor.fetchall()
-
-        # Por dia da semana
-        cursor.execute('''
-            SELECT strftime('%w', timestamp) as dia_semana,
-                   COUNT(*) as total,
-                   SUM(CASE WHEN resultado = 'Ganhou' THEN 1 ELSE 0 END) as ganhos
-            FROM trades
-            WHERE user_id = ? AND resultado IS NOT NULL
-            GROUP BY dia_semana
-            ORDER BY dia_semana
-        ''', (user_id,))
-        dias = cursor.fetchall()
-
-        conn.close()
-        
-        return {
-            "por_estrategia": estrategias,
-            "por_ativo": ativos,
-            "por_hora": horas,
-            "por_dia_semana": dias
-        }
+            # [C2] conversão para dict serializável
+            return {
+                "por_estrategia": [dict(r) for r in estrategias],
+                "por_ativo":      [dict(r) for r in ativos],
+                "por_hora":       [dict(r) for r in horas],
+                "por_dia_semana": [dict(r) for r in dias],
+            }
     except Exception as e:
         logging.error(f"Erro em get_performance_stats: {e}", exc_info=True)
-        # Retorna estrutura vazia para evitar erro 500
         return {
-            "por_estrategia": [],
-            "por_ativo": [],
-            "por_hora": [],
-            "por_dia_semana": []
+            "por_estrategia": [], "por_ativo": [],
+            "por_hora": [], "por_dia_semana": []
         }
