@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Registo | Foloma Visão 360</title>
-    <!-- Font Awesome para ícones -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         /* ===== RESET & BASE ===== */
@@ -269,14 +268,17 @@
 
         <!-- FORMULÁRIO -->
         <form id="registerForm" method="post" novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
             <!-- Username -->
             <div class="form-group">
                 <label for="username"><i class="fas fa-user" style="margin-right:6px;"></i> Utilizador</label>
                 <div class="input-wrapper" id="usernameWrapper">
                     <i class="fas fa-user"></i>
-                    <input type="text" id="username" name="username" placeholder="3 a 20 caracteres alfanuméricos"
+                    <input type="text" id="username" name="username"
+                           placeholder="3 a 20 caracteres alfanuméricos"
                            required pattern="[A-Za-z0-9]{3,20}" autocomplete="off"
-                           value="{{ request.form.get('username', '') }}">
+                           value="{{ request.form.get('username', '') }}" autofocus>
                 </div>
                 <div class="error-msg" id="usernameError">
                     <i class="fas fa-times-circle"></i> Utilizador deve ter 3 a 20 caracteres alfanuméricos.
@@ -288,13 +290,13 @@
                 <label for="password"><i class="fas fa-lock" style="margin-right:6px;"></i> Palavra-passe</label>
                 <div class="input-wrapper" id="passwordWrapper">
                     <i class="fas fa-key"></i>
-                    <input type="password" id="password" name="password" placeholder="Mínimo 8 caracteres"
+                    <input type="password" id="password" name="password"
+                           placeholder="Mínimo 8 caracteres"
                            required minlength="8" autocomplete="new-password">
                     <span class="toggle-password" id="togglePassword">
                         <i class="fas fa-eye"></i>
                     </span>
                 </div>
-                <!-- Indicador de força da senha -->
                 <div class="password-strength" id="strengthIndicator">
                     <div class="bar" id="strengthBar1"></div>
                     <div class="bar" id="strengthBar2"></div>
@@ -312,7 +314,8 @@
                 <div class="input-wrapper" id="confirmWrapper">
                     <i class="fas fa-check"></i>
                     <input type="password" id="confirm_password" name="confirm_password"
-                           placeholder="Digite novamente a palavra-passe" required autocomplete="new-password">
+                           placeholder="Digite novamente a palavra-passe"
+                           required autocomplete="new-password">
                 </div>
                 <div class="error-msg" id="confirmError">
                     <i class="fas fa-times-circle"></i> As palavras-passe não coincidem.
@@ -350,23 +353,19 @@
             const confirmPassword = document.getElementById('confirm_password');
             const togglePassword = document.getElementById('togglePassword');
 
-            // Elementos de erro
             const usernameError = document.getElementById('usernameError');
             const passwordError = document.getElementById('passwordError');
             const confirmError = document.getElementById('confirmError');
 
-            // Wrappers para estilo de erro
             const usernameWrapper = document.getElementById('usernameWrapper');
             const passwordWrapper = document.getElementById('passwordWrapper');
             const confirmWrapper = document.getElementById('confirmWrapper');
 
-            // Força da senha
             const strengthBar1 = document.getElementById('strengthBar1');
             const strengthBar2 = document.getElementById('strengthBar2');
             const strengthBar3 = document.getElementById('strengthBar3');
             const strengthLabel = document.getElementById('strengthLabel');
 
-            // ===== FUNÇÕES DE VALIDAÇÃO =====
             function validateUsername() {
                 const pattern = /^[A-Za-z0-9]{3,20}$/;
                 const valid = pattern.test(username.value.trim());
@@ -396,7 +395,6 @@
                 return v1 && v2 && v3;
             }
 
-            // ===== FORÇA DA SENHA =====
             function updateStrength() {
                 const pwd = password.value;
                 if (pwd.length === 0) {
@@ -406,25 +404,16 @@
                     strengthLabel.textContent = '—';
                     return;
                 }
-
                 let score = 0;
                 if (pwd.length >= 8) score++;
                 if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) score++;
                 if (/\d/.test(pwd)) score++;
                 if (/[^a-zA-Z0-9]/.test(pwd)) score++;
 
-                // Mapeia score para força
                 let level, label;
-                if (score <= 1) {
-                    level = 'weak';
-                    label = 'Fraca';
-                } else if (score <= 2) {
-                    level = 'medium';
-                    label = 'Média';
-                } else {
-                    level = 'strong';
-                    label = 'Forte';
-                }
+                if (score <= 1) { level = 'weak'; label = 'Fraca'; }
+                else if (score <= 2) { level = 'medium'; label = 'Média'; }
+                else { level = 'strong'; label = 'Forte'; }
 
                 strengthBar1.className = `bar ${level}`;
                 strengthBar2.className = `bar ${level}`;
@@ -432,8 +421,6 @@
                 strengthLabel.textContent = label;
             }
 
-            // ===== EVENTOS =====
-            // Validação em tempo real
             username.addEventListener('input', validateUsername);
             password.addEventListener('input', function() {
                 validatePassword();
@@ -442,7 +429,6 @@
             });
             confirmPassword.addEventListener('input', validateConfirm);
 
-            // Toggle password visibility
             togglePassword.addEventListener('click', function() {
                 const icon = this.querySelector('i');
                 if (password.type === 'password') {
@@ -454,22 +440,18 @@
                 }
             });
 
-            // ===== SUBMISSÃO =====
             form.addEventListener('submit', function(e) {
                 if (!validateForm()) {
                     e.preventDefault();
-                    // Foca no primeiro campo com erro
                     if (!validateUsername()) username.focus();
                     else if (!validatePassword()) password.focus();
                     else if (!validateConfirm()) confirmPassword.focus();
                     return;
                 }
 
-                // Desabilitar botão e mostrar spinner
                 btn.disabled = true;
                 btn.innerHTML = '<span class="spinner"></span> A criar conta...';
 
-                // Fallback: reativar após 5 segundos em caso de erro de rede
                 setTimeout(function() {
                     if (btn.disabled) {
                         btn.disabled = false;
@@ -478,8 +460,6 @@
                 }, 5000);
             });
 
-            // ===== INICIALIZAÇÃO =====
-            // Esconder mensagens flash após 5 segundos
             document.querySelectorAll('.flash').forEach(function(flash) {
                 setTimeout(function() {
                     flash.style.opacity = '0';
@@ -487,7 +467,6 @@
                 }, 5000);
             });
 
-            // Inicializar indicador de força
             updateStrength();
         })();
     </script>
