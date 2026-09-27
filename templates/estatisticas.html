@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
-        /* Mesmo estilo base do index.html */
+        /* ===== RESET & BASE ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -20,21 +20,58 @@
             max-width: 1200px;
             margin: 0 auto;
         }
+
+        /* ===== HEADER ===== */
         .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 16px 24px;
             background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(12px);
             border-radius: 24px;
             border: 1px solid rgba(255,255,255,0.06);
             margin-bottom: 28px;
             flex-wrap: wrap;
             gap: 12px;
         }
-        .header h1 { font-size: 1.6rem; color: #fbbf24; }
-        .header a { color: #94a3b8; text-decoration: none; }
-        .header a:hover { color: #fbbf24; }
+        .header h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fbbf24, #f59e0b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .header h1 i { -webkit-text-fill-color: #fbbf24; }
+        .nav-menu {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .nav-link {
+            color: #94a3b8;
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 6px 14px;
+            border-radius: 40px;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .nav-link:hover {
+            color: #f1f5f9;
+            background: rgba(255,255,255,0.05);
+        }
+        .nav-link.active {
+            color: #fbbf24;
+            background: rgba(251,191,36,0.1);
+        }
+
+        /* ===== CARDS ===== */
         .card {
             background: rgba(15, 23, 42, 0.8);
             border-radius: 24px;
@@ -54,12 +91,16 @@
             gap: 10px;
         }
         .card-title i { color: #fbbf24; }
+
+        /* ===== GRID ===== */
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 24px;
         }
         @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+
+        /* ===== TABELAS ===== */
         table {
             width: 100%;
             border-collapse: collapse;
@@ -70,42 +111,89 @@
             border-bottom: 1px solid rgba(255,255,255,0.05);
             text-align: left;
         }
-        th { color: #94a3b8; font-weight: 500; }
-        .badge {
-            padding: 2px 12px;
-            border-radius: 40px;
-            font-size: 0.75rem;
-            font-weight: 600;
+        th { color: #94a3b8; font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.3px; }
+        tr:hover td { background: rgba(30, 41, 59, 0.25); }
+        .acerto-bom { color: #22c55e; font-weight: 600; }
+        .acerto-medio { color: #fbbf24; font-weight: 600; }
+        .acerto-mau { color: #ef4444; font-weight: 600; }
+        .sem-dados {
+            text-align: center;
+            color: #64748b;
+            font-style: italic;
+            padding: 20px;
         }
-        .badge-win { background: rgba(34,197,94,0.2); color: #22c55e; }
-        .badge-loss { background: rgba(239,68,68,0.2); color: #ef4444; }
-        .chart-container { height: 200px; margin-top: 12px; }
+
+        /* ===== GRÁFICOS ===== */
+        .chart-container { height: 200px; margin-top: 12px; position: relative; }
+        .chart-empty {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            font-style: italic;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
 <div class="container">
+
+    <!-- HEADER -->
     <div class="header">
         <h1><i class="fas fa-chart-bar"></i> Estatísticas de Desempenho</h1>
-        <a href="{{ url_for('index') }}"><i class="fas fa-arrow-left"></i> Voltar</a>
+        <nav class="nav-menu">
+            <a href="{{ url_for('index') }}" class="nav-link">
+                <i class="fas fa-home"></i> Início
+            </a>
+            <a href="{{ url_for('estatisticas') }}" class="nav-link active">
+                <i class="fas fa-chart-bar"></i> Estatísticas
+            </a>
+            {% if current_user.is_admin %}
+                <a href="{{ url_for('admin') }}" class="nav-link">
+                    <i class="fas fa-crown"></i> Admin
+                </a>
+            {% endif %}
+            <a href="{{ url_for('logout') }}" class="nav-link">
+                <i class="fas fa-sign-out-alt"></i> Sair
+            </a>
+        </nav>
     </div>
 
+    <!-- POR ESTRATÉGIA / POR ATIVO -->
     <div class="grid-2">
         <div class="card">
             <div class="card-title"><i class="fas fa-chess-queen"></i> Por Estratégia</div>
             <table>
-                <thead><tr><th>Estratégia</th><th>Total</th><th>Ganhos</th><th>Acerto</th><th>Score Médio</th></tr></thead>
+                <thead>
+                    <tr>
+                        <th>Estratégia</th>
+                        <th>Total</th>
+                        <th>Ganhos</th>
+                        <th>Acerto</th>
+                        <th>Score Médio</th>
+                    </tr>
+                </thead>
                 <tbody>
-                {% for e in stats.por_estrategia %}
-                <tr>
-                    <td>{{ e.estrategia or 'Desconhecida' }}</td>
-                    <td>{{ e.total }}</td>
-                    <td>{{ e.ganhos or 0 }}</td>
-                    <td>{% if e.total %}{{ (e.ganhos / e.total * 100) | round(1) }}%{% else %}—{% endif %}</td>
-                    <td>{{ e.avg_score | round(2) if e.avg_score else '—' }}</td>
-                </tr>
-                {% else %}
-                <tr><td colspan="5" style="text-align:center; color:#64748b;">Sem dados suficientes.</td></tr>
-                {% endfor %}
+                    {% for e in stats.por_estrategia %}
+                    <tr>
+                        <td>{{ e.estrategia or 'Desconhecida' }}</td>
+                        <td>{{ e.total }}</td>
+                        <td>{{ e.ganhos or 0 }}</td>
+                        <td>
+                            {% if e.total %}
+                                {% set taxa = (e.ganhos / e.total * 100) %}
+                                <span class="{% if taxa >= 60 %}acerto-bom{% elif taxa >= 45 %}acerto-medio{% else %}acerto-mau{% endif %}">
+                                    {{ taxa | round(1) }}%
+                                </span>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td>{{ e.avg_score | round(2) if e.avg_score else '—' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="sem-dados">Sem dados suficientes.</td></tr>
+                    {% endfor %}
                 </tbody>
             </table>
         </div>
@@ -113,65 +201,114 @@
         <div class="card">
             <div class="card-title"><i class="fas fa-coins"></i> Por Ativo</div>
             <table>
-                <thead><tr><th>Ativo</th><th>Total</th><th>Ganhos</th><th>Acerto</th></tr></thead>
+                <thead>
+                    <tr>
+                        <th>Ativo</th>
+                        <th>Total</th>
+                        <th>Ganhos</th>
+                        <th>Acerto</th>
+                    </tr>
+                </thead>
                 <tbody>
-                {% for a in stats.por_ativo %}
-                <tr>
-                    <td>{{ a.ativo }}</td>
-                    <td>{{ a.total }}</td>
-                    <td>{{ a.ganhos or 0 }}</td>
-                    <td>{% if a.total %}{{ (a.ganhos / a.total * 100) | round(1) }}%{% else %}—{% endif %}</td>
-                </tr>
-                {% else %}
-                <tr><td colspan="4" style="text-align:center; color:#64748b;">Sem dados.</td></tr>
-                {% endfor %}
+                    {% for a in stats.por_ativo %}
+                    <tr>
+                        <td>{{ a.ativo }}</td>
+                        <td>{{ a.total }}</td>
+                        <td>{{ a.ganhos or 0 }}</td>
+                        <td>
+                            {% if a.total %}
+                                {% set taxa = (a.ganhos / a.total * 100) %}
+                                <span class="{% if taxa >= 60 %}acerto-bom{% elif taxa >= 45 %}acerto-medio{% else %}acerto-mau{% endif %}">
+                                    {{ taxa | round(1) }}%
+                                </span>
+                            {% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4" class="sem-dados">Sem dados.</td></tr>
+                    {% endfor %}
                 </tbody>
             </table>
         </div>
     </div>
 
+    <!-- POR HORA -->
     <div class="card">
         <div class="card-title"><i class="fas fa-clock"></i> Taxa de Acerto por Hora do Dia</div>
         <div class="chart-container">
             <canvas id="hourChart"></canvas>
+            <div class="chart-empty" id="hourEmpty" style="display:none;">
+                Sem dados suficientes para este gráfico.
+            </div>
         </div>
     </div>
 
+    <!-- POR DIA -->
     <div class="card">
         <div class="card-title"><i class="fas fa-calendar-week"></i> Taxa de Acerto por Dia da Semana</div>
         <div class="chart-container">
             <canvas id="dayChart"></canvas>
+            <div class="chart-empty" id="dayEmpty" style="display:none;">
+                Sem dados suficientes para este gráfico.
+            </div>
         </div>
     </div>
+
+    <footer style="text-align:center; margin-top:24px; font-size:0.75rem; color:#334155; border-top:1px solid rgba(255,255,255,0.04); padding-top:16px;">
+        <i class="fas fa-database"></i> Foloma Visão 360 &nbsp;·&nbsp; v2.1
+    </footer>
 </div>
 
 <script>
-    // Gráfico por Hora
+    const chartOpts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            y: {
+                beginAtZero: true, max: 100,
+                grid: { color: 'rgba(255,255,255,0.05)' },
+                ticks: { color: '#94a3b8' }
+            },
+            x: {
+                grid: { display: false },
+                ticks: { color: '#94a3b8' }
+            }
+        },
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                callbacks: {
+                    label: (ctx) => `${ctx.parsed.y.toFixed(1)}%`
+                }
+            }
+        }
+    };
+
+    // ---------- Por Hora ----------
     const horas = {{ stats.por_hora | tojson }};
     const hourLabels = horas.map(h => h.hora + 'h');
     const hourData = horas.map(h => h.total ? (h.ganhos / h.total * 100) : 0);
 
-    new Chart(document.getElementById('hourChart'), {
-        type: 'bar',
-        data: {
-            labels: hourLabels,
-            datasets: [{
-                label: 'Taxa de Acerto (%)',
-                data: hourData,
-                backgroundColor: 'rgba(251,191,36,0.4)',
-                borderColor: '#fbbf24',
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: { y: { beginAtZero: true, max: 100, grid: { color: 'rgba(255,255,255,0.05)' } } },
-            plugins: { legend: { display: false } }
-        }
-    });
+    if (hourLabels.length === 0) {
+        document.getElementById('hourEmpty').style.display = 'flex';
+    } else {
+        new Chart(document.getElementById('hourChart'), {
+            type: 'bar',
+            data: {
+                labels: hourLabels,
+                datasets: [{
+                    label: 'Taxa de Acerto (%)',
+                    data: hourData,
+                    backgroundColor: 'rgba(251,191,36,0.4)',
+                    borderColor: '#fbbf24',
+                    borderWidth: 1
+                }]
+            },
+            options: chartOpts
+        });
+    }
 
-    // Gráfico por Dia
+    // ---------- Por Dia ----------
     const dias = {{ stats.por_dia_semana | tojson }};
     const diaLabels = dias.map(d => {
         const map = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
@@ -179,25 +316,24 @@
     });
     const diaData = dias.map(d => d.total ? (d.ganhos / d.total * 100) : 0);
 
-    new Chart(document.getElementById('dayChart'), {
-        type: 'bar',
-        data: {
-            labels: diaLabels,
-            datasets: [{
-                label: 'Taxa de Acerto (%)',
-                data: diaData,
-                backgroundColor: 'rgba(34,197,94,0.4)',
-                borderColor: '#22c55e',
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: { y: { beginAtZero: true, max: 100, grid: { color: 'rgba(255,255,255,0.05)' } } },
-            plugins: { legend: { display: false } }
-        }
-    });
+    if (diaLabels.length === 0) {
+        document.getElementById('dayEmpty').style.display = 'flex';
+    } else {
+        new Chart(document.getElementById('dayChart'), {
+            type: 'bar',
+            data: {
+                labels: diaLabels,
+                datasets: [{
+                    label: 'Taxa de Acerto (%)',
+                    data: diaData,
+                    backgroundColor: 'rgba(34,197,94,0.4)',
+                    borderColor: '#22c55e',
+                    borderWidth: 1
+                }]
+            },
+            options: chartOpts
+        });
+    }
 </script>
 </body>
 </html>
